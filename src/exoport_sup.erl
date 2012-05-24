@@ -1,30 +1,95 @@
-%% -*- erlang-indent-level: 4; indent-tabs-mode: nil -*-
-%% Copyright (c) 2012 Feuerlabs, Inc.
-%%
+%%% -*- erlang-indent-level: 4; indent-tabs-mode: nil -*-
+%%% Copyright (c) 2012 Feuerlabs, Inc.
+%%%
+%%% @author Malotte W Lönne <malotte@malotte.net>
+%%% @copyright (C) 2012, Fueuerlabs, Inc
+%%% @doc
+%%%    Wrapper for bert ??
+%%%
+%%% Created :  14 May Ulf Wiger
+%%% @end
+%%%-------------------------------------------------------------------
 -module(exoport_sup).
 
 -behaviour(supervisor).
 
+-include_lib("bert/src/bert.hrl").
+
 %% API
--export([start_link/0]).
+-export([start_link/1,
+        stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
+-define(ACCESS_FILE,"rpc_access.conf").
+
 
 %% ===================================================================
 %% API functions
 %% ===================================================================
 
-start_link() ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+%%--------------------------------------------------------------------
+%% @doc
+%% Starts the supervisor. <br/>
+%% Arguments are sent on to the supervisor.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec start_link(Args::list(term())) -> 
+			{ok, Pid::pid()} | 
+			ignore | 
+			{error, Error::term()}.
+
+start_link(Args) ->
+    error_logger:info_msg("~p: start_link: args = ~p\n", [?MODULE, Args]),
+    case supervisor:start_link({local, ?MODULE}, ?MODULE, Args) of
+	{ok, Pid} ->
+	    {ok, Pid, {normal, Args}};
+	Error -> 
+	    error_logger:error_msg("~p: start_link: Failed to start process, "
+				   "reason ~p\n",  [?MODULE, Error]),
+	    Error
+    end.
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Stops the supervisor.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec stop(StartArgs::list(term())) -> ok | {error, Error::term()}.
+
+stop(_StartArgs) ->
+    exit(stopped).
+
 
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
+init(Args) ->
+    error_logger:info_msg("~p: init: args = ~p,\n pid = ~p\n", [?MODULE, Args, self()]),
+    %% Opts = proplists:get_value(options, Args, []),	    
+    %% FileName = proplists:get_value(access, Opts, []),	    
+    {ok, Access} = load_access(?ACCESS_FILE),
+    %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
+    NewOpts = [{access, Access}, {port, ?BERT_PORT}],
+    I = bert_rpc_exec,
+    BertRpc = {I, {I, start_link, [NewOpts]}, permanent, 5000, worker, [I]},
+ 
+    error_logger:info_msg("~p: About to start ~p\n", [?MODULE,BertRpc]),
+    {ok, { {one_for_one, 5, 10}, [BertRpc]} }.
 
-init([]) ->
-    {ok, { {one_for_one, 5, 10}, []} }.
+
+load_access(FileName) ->    
+    Dir = code:priv_dir(exoport),
+    File = filename:join(Dir, FileName),
+    case filelib:is_regular(File) of
+	true -> 
+            file:consult(File);
+	false ->  
+            error_logger:error_msg("~p: access: File ~p not found.\n", 
+                                  [?MODULE, File]), 
+            {ok, []}
+    end.
 
