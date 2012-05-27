@@ -73,7 +73,23 @@ init(Args) ->
     %% FileName = proplists:get_value(access, Opts, []),	    
     {ok, Access} = load_access(?ACCESS_FILE),
     %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
-    NewOpts = [{access, Access}, {port, ?BERT_PORT}],
+    io:fwrite("All Env = ~p~n", [application:get_all_env(exoport)]),
+    BertPort = opt_env(bert_port, ?BERT_PORT),
+    io:fwrite("BertPort = ~p~n", [BertPort]),
+    BertReuse = case application:get_env(bert, reuse_mode) of
+                    {ok, Mode} ->
+                        Mode;
+                    _ ->
+                        none
+                end,
+    BertAuth = case application:get_env(bert, auth) of
+                   {ok, AuthOpts} when is_list(AuthOpts) ->
+                       AuthOpts;
+                   _ -> false
+               end,
+    NewOpts = [{access, Access}, {port, BertPort},
+               {exo, [{reuse_mode, BertReuse},
+                      {auth, BertAuth}]}],
     I = bert_rpc_exec,
     BertRpc = {I, {I, start_link, [NewOpts]}, permanent, 5000, worker, [I]},
  
@@ -93,3 +109,10 @@ load_access(FileName) ->
             {ok, []}
     end.
 
+opt_env(K, Default) ->
+    case application:get_env(K) of
+        {ok, Val} ->
+            Val;
+        undefined ->
+            Default
+    end.

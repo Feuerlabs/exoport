@@ -9,11 +9,17 @@
 
 -export([start/0]).
 
+-export([rpc_auth_options/0]).
+
 %% helper when starting from command line
 start() ->
     application:start(bert),
     application:start(exoport).
 
-    
-    
-    
+rpc_auth_options() ->
+    case application:get_env(exoport, auth) of
+	{ok, Opts} ->
+	    Opts;
+	undefined ->
+	    false
+    end.
