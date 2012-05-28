@@ -15,6 +15,9 @@
 	 configure/1,
 	 reload_conf/0]).
 
+%% Only for EUC 2012
+-export([euc/1]).
+
 %% helper when starting from command line
 start() ->
     application:start(bert),
@@ -36,6 +39,15 @@ ping() ->
 	    {error, no_address}
     end.
 
+euc(sim) ->
+    configure(filename:join(code:priv_dir(exoport), "sim.conf")),
+    ping(),
+    timer:apply_interval(30000, exoport, ping, []);
+euc(live) ->
+    configure(filename:join(code:priv_dir(exoport), "target.conf")),
+    ping(),
+    timer:apply_interval(30000, exoport, ping, []).
+
 configure(File) ->
     case file:consult(File) of
 	{ok, Terms} ->
@@ -47,7 +59,8 @@ configure(File) ->
     end.
 
 reload_conf() ->
-    supervisor:restart_child(export_sup, bert_rpc_exec).
+    supervisor:terminate_child(exoport_sup, bert_rpc_exec),
+    supervisor:restart_child(exoport_sup, bert_rpc_exec).
 
 config_exodm_addr(Opts) ->
     Host = proplists:get_value(exodm_host, Opts, "localhost"),
