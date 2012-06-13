@@ -68,10 +68,9 @@ stop(_StartArgs) ->
 %% Supervisor callbacks
 %% ===================================================================
 init(Args) ->
-    error_logger:info_msg("~p: init: args = ~p,\n pid = ~p\n", [?MODULE, Args, self()]),
-    %% Opts = proplists:get_value(options, Args, []),	    
-    %% FileName = proplists:get_value(access, Opts, []),	    
-    {ok, Access} = load_access(?ACCESS_FILE),
+    error_logger:info_msg("~p: init: args = ~p,\n pid = ~p\n",
+                          [?MODULE, Args, self()]),
+    {ok, Access} = load_access(),
     %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
     io:fwrite("All Env = ~p~n", [application:get_all_env(exoport)]),
     BertPort = opt_env(bert_port, ?BERT_PORT),
@@ -96,6 +95,18 @@ init(Args) ->
     error_logger:info_msg("~p: About to start ~p\n", [?MODULE,BertRpc]),
     {ok, { {one_for_one, 5, 10}, [BertRpc]} }.
 
+
+load_access() ->
+    case application:get_env(exoport, access) of
+        {ok, {file, F}} ->
+            load_access(F);
+        undefined ->
+            load_access(?ACCESS_FILE);
+        {ok, []} ->
+            {ok, []};
+        {ok, [_|_] = Access} when is_tuple(hd(Access)) ->
+            {ok, Access}
+    end.
 
 load_access(FileName) ->    
     Dir = code:priv_dir(exoport),
