@@ -1,4 +1,4 @@
-%% -*- erlang-indent-level: 4; indent-tabs-mode: nil -*-
+%% -*- mode: erlang; erlang-indent-level: 4; indent-tabs-mode: nil -*-
 %% Copyright (c) 2012 Feuerlabs, Inc.
 %%
 {application, exoport,
@@ -9,8 +9,16 @@
   {applications, [
                   kernel,
                   stdlib,
-		  bert
+		  bert,
+                  kvdb
                  ]},
   {mod, { exoport_app, []}},
-  {env, []}
+  {env, [
+         {kvdb_databases,
+          [{kvdb_conf, [{file, "db/kvdb_conf"},
+                        {backend, sqlite3},
+                        {tables, [data]},
+                        {encoding, {raw,term,raw}}]}
+          ]}
+        ]}
  ]}.
