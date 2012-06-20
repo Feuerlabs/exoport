@@ -12,6 +12,7 @@
 -export([rpc_auth_options/0]).
 
 -export([ping/0,
+	 rpc/3,
 	 configure/1,
 	 reload_conf/0]).
 
@@ -32,9 +33,12 @@ rpc_auth_options() ->
     end.
 
 ping() ->
+    rpc(exodm_rpc, ping, []).
+
+rpc(M, F, A) ->
     case application:get_env(exoport, exodm_address) of
 	{ok, {Host, Port}} ->
-	    nice_bert_rpc:call_host(Host, Port, [tcp], exodm_rpc, ping, []);
+	    nice_bert_rpc:call_host(Host, Port, [tcp], M, F, A);
 	_ ->
 	    {error, no_address}
     end.
