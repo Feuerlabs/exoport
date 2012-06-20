@@ -14,11 +14,5 @@
                  ]},
   {mod, { exoport_app, []}},
   {env, [
-         {kvdb_databases,
-          [{kvdb_conf, [{file, "db/kvdb_conf"},
-                        {backend, sqlite3},
-                        {tables, [data]},
-                        {encoding, {raw,term,raw}}]}
-          ]}
         ]}
  ]}.
