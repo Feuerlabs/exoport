@@ -9,8 +9,7 @@
   {applications, [
                   kernel,
                   stdlib,
-		  bert,
-                  kvdb
+		  bert
                  ]},
   {mod, { exoport_app, []}},
   {env, [
