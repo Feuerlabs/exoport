@@ -91,6 +91,7 @@ config_device_id(Opts) ->
 	      bert, auth, [
 			   {id, to_binary(ID)},
 			   {client, [
+                                     {id, to_binary(ID)},
 				     {keys, {Ck, Sk}},
 				     {mod, bert_challenge}
 				    ]}
