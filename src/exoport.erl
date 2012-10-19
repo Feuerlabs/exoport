@@ -20,6 +20,7 @@
 
 -export([ping/0,
 	 rpc/3,
+	 notify/3,
 	 configure/1,
 	 reload_conf/0]).
 
@@ -49,6 +50,10 @@ rpc(M, F, A) ->
 	_ ->
 	    {error, no_address}
     end.
+
+notify(Module, Method, Info) ->
+    RPC = {exodm_rpc, notification, [Module, Method, Info]},
+    exoport_rpc:queue_rpc(RPC, {exoport_rpc, log_notify_result}).
 
 euc(sim) ->
     configure(filename:join(code:priv_dir(exoport), "sim.conf")),
