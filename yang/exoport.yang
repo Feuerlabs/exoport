@@ -312,8 +312,12 @@ module exoport
     rpc ep-activate-config {
         description
             "Activates a configuration stored in an image. " +
-            "The configuration is atomically switched in. ";
-
+            "The configuration is atomically switched in. " +
+            "Please note that the active configuration does not exist as an image, " +
+            "but instead resides outside the image namespace. " +
+            "The configuration active at the time this command is executed will be moved " +
+            "to a backup position (also outside the image namespace), and can be recalled " +
+            "with a ep-rollback-config command.";
 	input {
             leaf image-id {
                 description "ID of image to activate";
@@ -326,7 +330,19 @@ module exoport
                 type result-code;
             }
 	}
-
     }
 
+    rpc ep-rollback-config {
+        description
+            "Switch back to the previously active configuration. " +
+            "The previous configuration is atomically switched in. " +
+            "The configuration active when this call is made will become the backup. " +
+            "In effect, the active and backup configuration images will switch places.";
+
+	output {
+            leaf result {
+                type result-code;
+            }
+	}
+    }
 }
