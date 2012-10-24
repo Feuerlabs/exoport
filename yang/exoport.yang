@@ -14,7 +14,7 @@ module exoport
     prefix exoport;
 
     description
-        "Schema for ExoPort Core protocol. All types and calls " +
+        "Schema for ExoPort Core protocol carried over BERT-RPC. All calls " +
         "are prefixed with ep- (exoport) to denote them from app-specific "+
         "extensions to the protocol.";
 
