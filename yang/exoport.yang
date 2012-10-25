@@ -26,7 +26,6 @@ module exoport
         description "An Image ID.";
     }
 
-
     typedef result-code {
         type enumeration {
 	    enum ok {
@@ -126,7 +125,7 @@ module exoport
             "0 to int(image-size /chunk-size). " +
             "The chunk transfer will continue (with the possible overwriting of " +
             "earlier transmitted chunks) until a ep-finhish-image-transfer call " +
-            "is made. At that point checksumming and validation is done by the receiver "+ 
+            "is made. At that point checksumming and validation is done by the receiver "+
             "who will then return wether the image was trasnferred correctly OK or not." +
             "If the image size is -1, streaming, chunks will be " +
             "transmitted with the chunk-index ignored. ";
@@ -253,11 +252,9 @@ module exoport
         description
             "Installs one or more images transferred earlier.";
 	input {
-            list images {
-                leaf image-id {
-                    description "ID to reference the image by. (File name)";
-                    type image-id-type;
-                }
+            leaf-list images {
+                description "ID to reference the image by. (File name)";
+                type image-id-type;
             }
 	}
 
@@ -272,11 +269,9 @@ module exoport
         description
             "Upgrades one or more packages from the images transferred earlier.";
 	input {
-            list images {
-                leaf image-id {
-                    description "ID to reference the image by. (File name)";
-                    type image-id-type;
-                }
+            leaf-list images {
+                description "ID to reference the image by. (File name)";
+                type image-id-type;
             }
 	}
 
@@ -291,11 +286,9 @@ module exoport
         description
             "Upgrades one or more packages from the images transferred earlier.";
 	input {
-            list images {
-                leaf image-id {
-                    description "ID to reference the image by. (File name)";
-                    type image-id-type;
-                }
+            leaf-list images {
+                description "ID to reference the image by. (File name)";
+                type image-id-type;
             }
 	}
 
