@@ -14,7 +14,8 @@
 
 -module(exoport).
 
--export([start/0]).
+-export([start/0,
+	 start_rpc_server/0]).
 
 -export([rpc_auth_options/0]).
 
@@ -23,6 +24,10 @@
 	 notify/3,
 	 configure/1,
 	 reload_conf/0]).
+
+-include_lib("bert/src/bert.hrl").
+
+-define(ACCESS_FILE,"rpc_access.conf").
 
 %% Only for EUC 2012
 -export([euc/1]).
@@ -97,7 +102,7 @@ config_device_id(Opts) ->
 			   {id, to_binary(ID)},
 			   {client, [
                                      {id, to_binary(ID)},
-				     {keys, {Ck, Sk}},
+				     {keys, {uint64(Ck), uint64(Sk)}},
 				     {mod, bert_challenge}
 				    ]}
 			  ]),
@@ -108,3 +113,70 @@ to_binary(B) when is_binary(B) ->
     B;
 to_binary(L) when is_list(L) ->
     list_to_binary(L).
+
+uint64(I) when is_integer(I), I >= 0 ->
+    <<I:64>>;
+uint64(L) when is_list(L) ->
+    <<(list_to_integer(L)):64>>;
+uint64(<<_:64>> = Bin) ->
+    Bin.
+
+
+start_rpc_server() ->
+    error_logger:info_msg("~p: start_rpc_server: pid = ~p\n",
+                          [?MODULE, self()]),
+    {ok, Access} = load_access(),
+    %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
+    io:fwrite("All Env = ~p~n", [application:get_all_env(exoport)]),
+    BertPort = opt_env(bert_port, ?BERT_PORT),
+    io:fwrite("BertPort = ~p~n", [BertPort]),
+    BertReuse = case application:get_env(bert, reuse_mode) of
+                    {ok, Mode} ->
+                        Mode;
+                    _ ->
+                        none
+                end,
+    BertAuth = case application:get_env(bert, auth) of
+                   {ok, AuthOpts} when is_list(AuthOpts) ->
+                       AuthOpts;
+                   _ -> false
+               end,
+    NewOpts = [{access, Access}, {port, BertPort},
+               {exo, [{reuse_mode, BertReuse},
+                      {auth, BertAuth}]}],
+    error_logger:info_msg("~p: About to start bert_rpc_exec~n"
+			  "Opts = ~p~n", [?MODULE, NewOpts]),
+    bert_rpc_exec:start_link(NewOpts).
+
+load_access() ->
+    case application:get_env(exoport, access) of
+        {ok, {file, F}} ->
+            load_access(F);
+        undefined ->
+            load_access(?ACCESS_FILE);
+        {ok, []} ->
+            {ok, []};
+        {ok, [_|_] = Access} when is_tuple(hd(Access)) ->
+            {ok, Access}
+    end.
+
+
+load_access(FileName) ->
+    Dir = code:priv_dir(exoport),
+    File = filename:join(Dir, FileName),
+    case filelib:is_regular(File) of
+	true ->
+            file:consult(File);
+	false ->
+            error_logger:error_msg("~p: access: File ~p not found.\n",
+                                  [?MODULE, File]),
+            {ok, []}
+    end.
+
+opt_env(K, Default) ->
+    case application:get_env(K) of
+        {ok, Val} ->
+            Val;
+        undefined ->
+            Default
+    end.
