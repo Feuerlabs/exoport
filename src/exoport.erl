@@ -14,7 +14,7 @@
 
 -module(exoport).
 
--export([start/0,
+-export([start/0, start/1,
 	 start_rpc_server/0]).
 
 -export([rpc_auth_options/0]).
@@ -22,7 +22,7 @@
 -export([ping/0,
 	 rpc/3,
 	 notify/3,
-	 configure/1,
+	 configure/1, configure/2,
 	 reload_conf/0]).
 
 -include_lib("bert/src/bert.hrl").
@@ -34,8 +34,24 @@
 
 %% helper when starting from command line
 start() ->
-    application:start(bert),
-    application:start(exoport).
+    start([]).
+
+start(Opts) ->
+    Apps = [crypto, public_key, exo, bert, kvdb, exoport],
+    [application:load(A) || A <- Apps],
+    lists:foreach(fun({config, Cfg}) ->
+			  configure(Cfg, false);
+		     ({K, V}) ->
+			  application:set_env(exoport, K, V);
+		     ({A, K, V}) ->
+			  case lists:member(A, Apps) of
+			      true -> application:set_env(A, K, V);
+			      false ->
+				  error({not_allowed, [set_env, {A,K,V}]})
+			  end
+		  end, Opts),
+    [application:start(A) || A <- Apps],
+    ok.
 
 rpc_auth_options() ->
     case application:get_env(exoport, auth) of
@@ -69,15 +85,28 @@ euc(live) ->
     ping(),
     timer:apply_interval(30000, exoport, ping, []).
 
-configure(File) ->
-    case file:consult(File) of
+configure(FileOrOpts) ->
+    configure(FileOrOpts, _Reload = true).
+
+configure(FileOrOpts, Reload) when is_boolean(Reload) ->
+    case consult_config(FileOrOpts) of
 	{ok, Terms} ->
 	    config_exodm_addr(Terms),
 	    config_device_id(Terms),
-	    reload_conf();
+	    if Reload ->
+		    reload_conf();
+	       true ->
+		    ok
+	    end;
 	Error ->
 	    Error
     end.
+
+consult_config([T|_] = Config) when is_tuple(T) ->
+    {ok, Config};
+consult_config([I|_] = File) when is_integer(I) ->
+    file:consult(File).
+
 
 reload_conf() ->
     supervisor:terminate_child(exoport_sup, bert_rpc_exec),
