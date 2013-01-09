@@ -29,9 +29,6 @@
 
 -define(ACCESS_FILE,"rpc_access.conf").
 
-%% Only for EUC 2012
--export([euc/1]).
-
 %% helper when starting from command line
 start() ->
     start([]).
@@ -76,15 +73,6 @@ notify(Module, Method, Info) ->
     RPC = {exodm_rpc, notification, [Module, Method, Info]},
     exoport_rpc:queue_rpc(RPC, {exoport_rpc, log_notify_result}).
 
-euc(sim) ->
-    configure(filename:join(code:priv_dir(exoport), "sim.conf")),
-    ping(),
-    timer:apply_interval(30000, exoport, ping, []);
-euc(live) ->
-    configure(filename:join(code:priv_dir(exoport), "target.conf")),
-    ping(),
-    timer:apply_interval(30000, exoport, ping, []).
-
 configure(FileOrOpts) ->
     configure(FileOrOpts, _Reload = true).
 
@@ -93,6 +81,7 @@ configure(FileOrOpts, Reload) when is_boolean(Reload) ->
 	{ok, Terms} ->
 	    config_exodm_addr(Terms),
 	    config_device_id(Terms),
+	    application:set_env(exoport, config, FileOrOpts),
 	    if Reload ->
 		    reload_conf();
 	       true ->
@@ -104,6 +93,8 @@ configure(FileOrOpts, Reload) when is_boolean(Reload) ->
 
 consult_config([T|_] = Config) when is_tuple(T) ->
     {ok, Config};
+consult_config({script, File}) ->
+    file:script(File);
 consult_config([I|_] = File) when is_integer(I) ->
     file:consult(File).
 
@@ -113,18 +104,18 @@ reload_conf() ->
     supervisor:restart_child(exoport_sup, bert_rpc_exec).
 
 config_exodm_addr(Opts) ->
-    Host = proplists:get_value(exodm_host, Opts, "localhost"),
-    Port = proplists:get_value(exodm_port, Opts, 9900),
+    Host = proplists:get_value([exodm_host, host], Opts, "localhost"),
+    Port = proplists:get_value([exodm_port, port], Opts, 9900),
     application:set_env(exoport, exodm_address, {Host, Port}),
     true.
 
 config_device_id(Opts) ->
-    case proplists:get_value(device_id, Opts) of
+    case alt_opt([device_id, 'device-id'], Opts) of
 	undefined ->
 	    false;
 	ID ->
-	    Ck = proplists:get_value(ckey, Opts),
-	    Sk = proplists:get_value(skey, Opts),
+	    Ck = alt_opt([ckey, 'client-key'], Opts),
+	    Sk = alt_opt([skey, 'server-key'], Opts),
 	    application:set_env(bert, reuse_mode, client),
 	    application:set_env(
 	      bert, auth, [
@@ -154,6 +145,13 @@ uint64(<<_:64>> = Bin) ->
 start_rpc_server() ->
     error_logger:info_msg("~p: start_rpc_server: pid = ~p\n",
                           [?MODULE, self()]),
+    case application:get_env(exoport, config) of
+	{ok, Cfg} ->
+	    io:fwrite("Preset exoport config: ~p~n", [Cfg]),
+	    configure(Cfg, false);
+	undefined ->
+	    ok
+    end,
     {ok, Access} = load_access(),
     %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
     io:fwrite("All Env = ~p~n", [application:get_all_env(exoport)]),
@@ -209,3 +207,14 @@ opt_env(K, Default) ->
         undefined ->
             Default
     end.
+
+alt_opt([H|T], Opts) ->
+    case lists:keyfind(H, 1, Opts) of
+	{_, Val} ->
+	    Val;
+	false ->
+	    alt_opt(T, Opts)
+    end;
+alt_opt([], _) ->
+    undefined.
+
