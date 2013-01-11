@@ -26,6 +26,7 @@
 	 reload_conf/0]).
 
 -include_lib("bert/src/bert.hrl").
+-include_lib("lager/include/log.hrl").
 
 -define(ACCESS_FILE,"rpc_access.conf").
 
@@ -77,8 +78,10 @@ configure(FileOrOpts) ->
     configure(FileOrOpts, _Reload = true).
 
 configure(FileOrOpts, Reload) when is_boolean(Reload) ->
+    io:fwrite("configure(~p, ~p)~n", [FileOrOpts, Reload]),
     case consult_config(FileOrOpts) of
 	{ok, Terms} ->
+	    io:fwrite("config Terms = ~p~n", [Terms]),
 	    config_exodm_addr(Terms),
 	    config_device_id(Terms),
 	    application:set_env(exoport, config, FileOrOpts),
@@ -88,6 +91,7 @@ configure(FileOrOpts, Reload) when is_boolean(Reload) ->
 		    ok
 	    end;
 	Error ->
+	    io:fwrite("configure(...) -> ~p~n", [Error]),
 	    Error
     end.
 
@@ -104,8 +108,8 @@ reload_conf() ->
     supervisor:restart_child(exoport_sup, bert_rpc_exec).
 
 config_exodm_addr(Opts) ->
-    Host = proplists:get_value([exodm_host, host], Opts, "localhost"),
-    Port = proplists:get_value([exodm_port, port], Opts, 9900),
+    Host = alt_opt([exodm_host, host], Opts, "localhost"),
+    Port = alt_opt([exodm_port, port], Opts, 9900),
     application:set_env(exoport, exodm_address, {Host, Port}),
     true.
 
@@ -114,8 +118,8 @@ config_device_id(Opts) ->
 	undefined ->
 	    false;
 	ID ->
-	    Ck = alt_opt([ckey, 'client-key'], Opts),
-	    Sk = alt_opt([skey, 'server-key'], Opts),
+	    Ck = alt_opt([ckey, 'client-key'], Opts, 0),
+	    Sk = alt_opt([skey, 'server-key'], Opts, 0),
 	    application:set_env(bert, reuse_mode, client),
 	    application:set_env(
 	      bert, auth, [
@@ -208,13 +212,16 @@ opt_env(K, Default) ->
             Default
     end.
 
-alt_opt([H|T], Opts) ->
+alt_opt(Keys, Opts) ->
+    alt_opt(Keys, Opts, undefined).
+
+alt_opt([H|T], Opts, Default) ->
     case lists:keyfind(H, 1, Opts) of
 	{_, Val} ->
 	    Val;
 	false ->
-	    alt_opt(T, Opts)
+	    alt_opt(T, Opts, Default)
     end;
-alt_opt([], _) ->
-    undefined.
+alt_opt([], _, Default) ->
+    Default.
 
