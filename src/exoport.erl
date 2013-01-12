@@ -25,7 +25,7 @@
 	 configure/1, configure/2,
 	 reload_conf/0]).
 
--include_lib("bert/src/bert.hrl").
+-include_lib("bert/include/bert.hrl").
 -include_lib("lager/include/log.hrl").
 
 -define(ACCESS_FILE,"rpc_access.conf").
