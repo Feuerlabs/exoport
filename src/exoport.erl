@@ -63,12 +63,14 @@ ping() ->
     rpc(exodm_rpc, ping, []).
 
 rpc(M, F, A) ->
-    case application:get_env(exoport, exodm_address) of
-	{ok, {Host, Port}} ->
-	    nice_bert_rpc:call_host(Host, Port, [tcp], M, F, A);
-	_ ->
-	    {error, no_address}
-    end.
+    exoport_server:rpc(M, F, A).
+%% rpc(M, F, A) ->
+%%     case application:get_env(exoport, exodm_address) of
+%% 	{ok, {Host, Port}} ->
+%% 	    nice_bert_rpc:call_host(Host, Port, [tcp], M, F, A);
+%% 	_ ->
+%% 	    {error, no_address}
+%%     end.
 
 notify(Module, Method, Info) ->
     RPC = {exodm_rpc, notification, [Module, Method, Info]},

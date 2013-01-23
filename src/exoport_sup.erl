@@ -74,6 +74,8 @@ stop(_StartArgs) ->
 %% ===================================================================
 init(_Args) ->
     {ok, { {one_for_one, 5, 10},
-	   [{bert_rpc_exec, {exoport, start_rpc_server, []},
+	   [{exoport_server, {exoport_server, start_link, []},
+	     permanent, 5000, worker, [exoport_server]},
+	    {bert_rpc_exec, {exoport, start_rpc_server, []},
 	     permanent, 5000, worker, [bert_rpc_exec]}] } }.
 
