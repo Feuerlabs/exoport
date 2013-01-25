@@ -13,7 +13,8 @@
 -module(exoport_server).
 -behavior(gen_server).
 
--export([rpc/3]).
+-export([rpc/3,
+	 disconnect/0]).
 
 -export([start_link/0,
 	 init/1,
@@ -36,6 +37,9 @@ rpc(M, F, A) ->
 	    error(Reason)
     end.
 
+disconnect() ->
+    gen_server:call(?MODULE, disconnect, infinity).
+
 init(_) ->
     {ok, #st{}}.
 
@@ -46,6 +50,9 @@ handle_call({call, M, F, A}, _From, St) ->
 		    {error, Reason}
 	    end,
     {reply, Reply, St};
+handle_call(disconnect, _, St) ->
+    Res = nice_bert_rpc:disconnect(),
+    {reply, Res, St};
 handle_call(_, _, St) ->
     {reply, {error, unknown_call}, St}.
 
@@ -69,3 +76,10 @@ rpc_(M, F, A) ->
 	    {error, no_address}
     end.
 
+disconnect_() ->
+    case application:get_env(exoport, exodm_address) of
+	{ok, {Host, Port}} ->
+	    {ok, nice_bert_rpc:disconnect(Host, Port, [tcp])};
+	_ ->
+	    {error, no_address}
+    end.

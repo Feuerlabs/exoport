@@ -22,6 +22,7 @@
 -export([ping/0,
 	 rpc/3,
 	 notify/3,
+	 disconnect/0,
 	 configure/1, configure/2,
 	 reload_conf/0]).
 
@@ -75,6 +76,9 @@ rpc(M, F, A) ->
 notify(Module, Method, Info) ->
     RPC = {exodm_rpc, notification, [Module, Method, Info]},
     exoport_rpc:queue_rpc(RPC, {exoport_rpc, log_notify_result}).
+
+disconnect() ->
+    exoport_server:disconnect().
 
 configure(FileOrOpts) ->
     configure(FileOrOpts, _Reload = true).
