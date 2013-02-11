@@ -20,10 +20,9 @@ queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook) ->
     exoport_dispatcher:check_queue(exoport).
 
 dispatch(Queue) ->
-    case kvdb:prel_pop(kvdb_conf, Queue) of
-	{ok, {_, Env, {M,F,A} = RPC} = Entry, AbsKey} ->
-	    ?debug("PREL_POP: Entry = ~p~n"
-		   "   AbsKey = ~p~n", [Entry, AbsKey]),
+    case kvdb:pop(kvdb_conf, Queue) of
+	{ok, {_, Env, {M,F,A} = RPC} = Entry} ->
+	    ?debug("POP: Entry = ~p~n", [Entry]),
 	    case exoport:rpc(M, F, A) of
 		{reply, Reply, []} ->
 		    ?debug("Reply: rpc(~p, ~p, ~p) -> ~p~n", [M,F,A,Reply]),
@@ -41,6 +40,6 @@ dispatch(Queue) ->
 			   [M, F, A, Other])
 	    end;
 	done ->
-	    ?debug("PREL_POP: done~n", []),
+	    ?debug("POP: done~n", []),
 	    ok
     end.
