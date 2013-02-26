@@ -29,6 +29,7 @@
 
 %% helper when starting from command line
 start() ->
+    application:start(exo),
     application:start(bert),
     application:start(exoport).
 
