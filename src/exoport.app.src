@@ -12,6 +12,12 @@
 		  bert
                  ]},
   {mod, { exoport_app, []}},
+  {start_phases, [{auto_connect, []}]},
   {env, [
+         {'$setup_hooks', [
+                           {100, {exoport_setup, start_db, []}},
+                           {200, {exoport_setup, create_tables, []}},
+                           {300, {exoport_setup, initial_data, []}}
+                          ]}
         ]}
  ]}.

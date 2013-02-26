@@ -23,7 +23,9 @@
 -behaviour(application).
 
 %% Application callbacks
--export([start/2, stop/1]).
+-export([start/2,
+	 start_phase/3,
+	 stop/1]).
 
 %% ===================================================================
 %% Application callbacks
@@ -53,6 +55,10 @@ start(_StartType, _StartArgs) ->
 	   end,
     Args = [{options, Opts}],
     exoport_sup:start_link(Args).
+
+start_phase(auto_connect, _, _) ->
+    exoport_server:maybe_connect(),
+    ok.
 
 %%--------------------------------------------------------------------
 %% @doc
