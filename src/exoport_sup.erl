@@ -24,11 +24,13 @@
 
 %% API
 -export([start_link/1,
-        stop/1]).
+	 stop/1,
+	 add_children/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
+-record(conf, {id, gconf, docroot, sconf}).
 
 %% ===================================================================
 %% API functions
@@ -41,9 +43,9 @@
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec start_link(Args::list(term())) -> 
-			{ok, Pid::pid()} | 
-			ignore | 
+-spec start_link(Args::list(term())) ->
+			{ok, Pid::pid()} |
+			ignore |
 			{error, Error::term()}.
 
 start_link(Args) ->
@@ -51,7 +53,7 @@ start_link(Args) ->
     case supervisor:start_link({local, ?MODULE}, ?MODULE, Args) of
 	{ok, Pid} ->
 	    {ok, Pid, {normal, Args}};
-	Error -> 
+	Error ->
 	    error_logger:error_msg("~p: start_link: Failed to start process, "
 				   "reason ~p\n",  [?MODULE, Error]),
 	    Error
@@ -82,3 +84,12 @@ init(_Args) ->
 	    {bert_rpc_exec, {exoport, start_rpc_server, []},
 	     permanent, 5000, worker, [bert_rpc_exec]}] } }.
 
+
+add_children(ChildSpecs) ->
+    [ok(supervisor:start_child(?MODULE, Ch)) || Ch <- ChildSpecs],
+    ok.
+
+ok({ok, _}) -> ok;
+ok({ok, _, _}) -> ok;
+ok(Other) ->
+    error(Other).

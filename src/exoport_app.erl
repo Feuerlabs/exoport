@@ -56,6 +56,9 @@ start(_StartType, _StartArgs) ->
     Args = [{options, Opts}],
     exoport_sup:start_link(Args).
 
+start_phase(start_http, _, _) ->
+    exoport_http:instance(),
+    ok;
 start_phase(auto_connect, _, _) ->
     exoport_server:maybe_connect(),
     ok.
