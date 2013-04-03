@@ -2,9 +2,11 @@
 -export([instance/1,
 	 handle_body/4,
 	 json_rpc/1,
-	 rpc/4]).
+	 json_rpc/2]).
 
 -include_lib("exo/include/exo_http.hrl").
+-include_lib("lager/include/log.hrl").
+
 
 instance(Opts) ->
     Port = opt(port, Opts, 8800),
@@ -27,14 +29,16 @@ handle_body(Socket, Request, Body, AppMod) ->
 		    case call_appmod(AppMod, json_rpc, Call) of
 			{ok, Reply} ->
 			    success_response(Socket, Id, Reply);
+			ok ->
+			    ok;
 			{error, Error} ->
 			    error_response(Socket, Id, Error)
 		    end;
 		{notification, _Method, _Args} = Notif ->
 		    call_appmod(AppMod, json_rpc, Notif),
 		    exo_http_server:response(Socket, undefined, 200, "OK", "");
-		{error, _} = Err ->
-		    Err
+		{error, _} ->
+		    error_response(Socket, parse_error)
 	    catch
 		error:_ ->
 		    exo_http_server:response(Socket, undefined, 501,
@@ -59,11 +63,41 @@ call_appmod(AppMod, Fun, Body) when is_atom(AppMod) ->
     end.
 
 %% Validated RPC
-rpc(Mod, Method, Args, Meta) ->
-    io:fwrite("Validated RPC: ~s:~s(~p, ~p)~n", [Mod, Method, Args, Meta]),
-    {ok, "ok"}.
+handle_rpc(CB, Mod, Method, Args, Meta) ->
+    case CB of
+	[] ->
+	    io:fwrite("Validated RPC: ~s:~s(~p, ~p)~n",
+		      [Mod, Method, Args, Meta]),
+	    {ok, "ok"};
+	_ ->
+	    try call_cb_rpc(CB, Mod, Method, Args, Meta) of
+		{ok, Result} ->
+		    case validate_rpc_result(Result, Mod, Method) of
+			{ok, JSON} ->
+			    {ok, JSON};
+			{error, Reason} ->
+			    {error, Reason}
+		    end;
+		{error, _} = CallErr ->
+		    CallErr
+	    catch
+		error:Crash ->
+		    ?error("rpc callback CRASH: ~p~n~p~n",
+			   [Crash, erlang:get_stacktrace()]),
+		    {error, internal_error}
+	    end
+    end.
 
-json_rpc({call, _Id, Method, {struct, Args}}) ->
+call_cb_rpc(CBMod, Mod, Method, Args, Meta) when is_atom(CBMod) ->
+    CBMod:handle_rpc(Mod, Method, Args, Meta);
+call_cb_rpc({CBMod, St}, Mod, Method, Args, Meta) ->
+    CBMod:handle_rpc(Mod, Method, Args, Meta, St).
+
+
+json_rpc(Req) ->
+    json_rpc(Req, []).
+
+json_rpc({call, _Id, Method, {struct, Args}}, CB) ->
     case re:split(Method, ":", [{return, list}]) of
 	[ModS, FunS] ->
 	    try Mod = list_to_existing_atom("yang_spec_" ++ ModS),
@@ -75,9 +109,9 @@ json_rpc({call, _Id, Method, {struct, Args}}) ->
 			 try yang_json:validate_rpc_request(
 			       InputElems, Args) of
 			     {ok, Elems, Meta} ->
-				 rpc(list_to_binary(ModS),
-				     list_to_binary(FunS),
-				     Elems, Meta);
+				 handle_rpc(CB, list_to_binary(ModS),
+					    list_to_binary(FunS),
+					    Elems, Meta);
 			     {error, _Reason} ->
 				 {error, parse_error}
 			 catch
@@ -96,12 +130,34 @@ json_rpc({call, _Id, Method, {struct, Args}}) ->
 	    {error, method_not_found}
     end.
 
+validate_rpc_result(Result, Mod, Method) ->
+    ErlMod = list_to_existing_atom("yang_spec_" ++ binary_to_list(Mod)),
+    case ErlMod:rpc(Method) of
+	{rpc, _, _, Data} ->
+	    %% This really should be FIXed; output is not mandatory
+	    {output, _, _, Elems} = lists:keyfind(output, 1, Data),
+	    JSON = data_to_json(Elems, [], Result),
+	    {ok, {struct, JSON}};
+	error ->
+	    {error, method_not_found}
+    end.
+
 success_response(Socket, Id, Reply) ->
     JSON = {struct, [{"jsonrpc", "2.0"},
 		     {"id", Id},
 		     {"result", Reply}]},
     exo_http_server:response(Socket, undefined, 200, "OK",
 			     exo_json:encode(JSON),
+			     [{content_type, "application/json"}]).
+
+error_response(Socket, Error) ->
+    %% No Id available
+    JSON = {struct, [{"jsonrpc", "2.0"},
+		     {"error", {struct,
+				[{"code", json_error_code(Error)},
+				 {"message", json_error_msg(Error)}]}}]},
+    Body = list_to_binary(exo_json:encode(JSON)),
+    exo_http_server:response(Socket, undefined, 200, "OK", Body,
 			     [{content_type, "application/json"}]).
 
 error_response(Socket, Id, Error) ->
@@ -157,3 +213,90 @@ opt(K, L, Def) ->
 	{_, V} -> V;
 	false  -> Def
     end.
+
+
+%%
+data_to_json(Elems, Env, Data) ->
+    ?debug("data_to_json(~p, ~p, ~p)~n", [Elems, Env, Data]),
+    case find_leaf(<<"rpc-status-string">>, Elems) of
+        false ->
+            yang_json:data_to_json(Elems, Env, Data);
+        _Leaf ->
+            case keyfind(<<"rpc-status-string">>, Data) of
+                false ->
+                    case keyfind(<<"rpc-status">>, Data) of
+                        false ->
+                            yang_json:data_to_json(Elems, Env, Data);
+                        Status ->
+                            case enum_descr(find_leaf(<<"rpc-status">>, Elems),
+                                            to_binary(element(2, Status))) of
+                                false ->
+                                    yang_json:data_to_json(Elems, Env, Data);
+                                Descr ->
+                                    yang_json:data_to_json(
+                                      Elems, Env,
+                                      [{<<"rpc-status-string">>, Descr}|Data])
+                            end
+                    end;
+                _ ->
+                    yang_json:data_to_json(Elems, Env, Data)
+            end
+    end.
+
+enum_descr(false, _) -> false;
+enum_descr({leaf, _, _, I}, V) ->
+    case lists:keyfind(type, 1, I) of
+        {_, _, <<"enumeration">>, I1} ->
+            enum_descr_(I1, V);
+        _ ->
+            false
+    end.
+
+%% Assume rpc-status can be either the numeric value or the description.
+enum_descr_([{enum,_,V,I}|_], V) ->
+    case lists:keyfind(description,1,I) of
+        {_, _, Descr, _} -> Descr;
+        false -> V
+    end;
+enum_descr_([{enum,_,D,I}|T], V) ->
+    case lists:keyfind(value, 1, I) of
+        {_, _, V, _} ->
+            case lists:keyfind(description,1,I) of
+                {_, _, Descr, _} -> Descr;
+                false -> D
+            end;
+        _ ->
+            enum_descr_(T, V)
+    end;
+enum_descr_([_|T], V) ->
+    enum_descr_(T, V);
+enum_descr_([], _) ->
+    false.
+
+
+
+find_leaf(K, [{leaf,_,K,_} = L|_]) -> L;
+find_leaf(K, [_|T]) -> find_leaf(K, T);
+find_leaf(_, []) -> false.
+
+keyfind(A, [H|T]) when is_tuple(H) ->
+    K = element(1, H),
+    case comp(A,K) of
+        true ->
+            H;
+        false ->
+            keyfind(A, T)
+    end;
+keyfind(_, []) ->
+    false.
+
+comp(A, A) -> true;
+comp(A, B) when is_binary(A), is_list(B) ->
+    binary_to_list(A) == B;
+comp(A, B) when is_binary(A), is_atom(B) ->
+    A == atom_to_binary(B, latin1);
+comp(_, _) ->
+    false.
+
+to_binary(B) when is_binary(B) -> B;
+to_binary(L) when is_list(L) -> list_to_binary(L).
