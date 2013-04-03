@@ -59,6 +59,9 @@ start(_StartType, _StartArgs) ->
 start_phase(start_http, _, _) ->
     exoport_http:instance(),
     ok;
+start_phase(load_yang_specs, _, _) ->
+    load_yang_specs(),
+    ok;
 start_phase(auto_connect, _, _) ->
     exoport_server:maybe_connect(),
     ok.
@@ -73,3 +76,30 @@ start_phase(auto_connect, _, _) ->
 
 stop(_State) ->
     exit(stopped).
+
+
+load_yang_specs() ->
+    Mods = setup:find_env_vars(yang_spec_modules),
+    lists:foreach(
+      fun({_AppName, Pats} = P) ->
+	      io:fwrite("Yang spec module pat: ~p~n", [P]),
+	      apply_pats(Pats)
+      end, Mods).
+
+apply_pats([{Dir, FilePat}|Ps]) ->
+    Files = filelib:wildcard(FilePat, Dir),
+    lists:foreach(
+      fun(F) ->
+	      case filename:extension(F) of
+		  ".beam" ->
+		      File = filename:join(Dir, filename:basename(F, ".beam")),
+		      LoadRes = code:load_abs(File),
+		      io:fwrite("LoadRes (~s.beam): ~p~n", [File, LoadRes]);
+		  _ ->
+		      io:fwrite("Skipping ~s~n", [F])
+	      end
+      end, Files),
+    apply_pats(Ps);
+apply_pats([]) ->
+    ok.
+

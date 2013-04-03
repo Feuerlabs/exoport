@@ -12,7 +12,8 @@
 		  bert
                  ]},
   {mod, { exoport_app, []}},
-  {start_phases, [{start_http, []},
+  {start_phases, [{load_yang_specs, []},
+                  {start_http, []},
                   {auto_connect, []}]},
   {env, [
          {'$setup_hooks', [

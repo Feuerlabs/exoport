@@ -10,41 +10,36 @@
 instance() ->
     case application:get_env(yaws_http) of
 	{ok, Opts} ->
-	    Gconf = gconf(Opts),
-	    Sconf = sconf(Opts),
-	    {_, Id} = lists:keyfind(id, 1, Gconf),
-	    {_, LogDir} = lists:keyfind(log_dir, 1, Gconf),
-	    {_, DocRoot} = lists:keyfind(docroot, 1, Gconf),
-	    setup:verify_dir(LogDir),
-	    setup:verify_dir(DocRoot),
-            {ok, SC, GC, ChildSpecs} =
-                yaws_api:embedded_start_conf(DocRoot, Sconf, Gconf, Id),
-            ?debug("Yaws:~n"
-                   "  SC = ~p~n"
-                   "  GC = ~p~n"
-                   "  ChildSpecs = ~p~n", [SC, GC, ChildSpecs]),
-            exoport_sup:add_children(ChildSpecs),
-            yaws_api:setconf(GC, SC);
+	    yaws_instance(Opts);
 	undefined ->
-	    ok
+	    case application:get_env(exo_http) of
+		{ok, Opts} ->
+		    exoport_exo_http:instance(Opts);
+		undefined ->
+		    ok
+	    end
     end.
 
-yaws_conf(Opts) ->
-    #conf{
-           gconf = gconf(Opts),
-	   sconf = sconf(Opts)
-         }.
+%% ===================== YAWS Config ============================
+yaws_instance(Opts) ->
+    Gconf = gconf(Opts),
+    Sconf = sconf(Opts),
+    {_, Id} = lists:keyfind(id, 1, Gconf),
+    {_, LogDir} = lists:keyfind(log_dir, 1, Gconf),
+    {_, DocRoot} = lists:keyfind(docroot, 1, Gconf),
+    setup:verify_dir(LogDir),
+    setup:verify_dir(DocRoot),
+    {ok, SC, GC, ChildSpecs} =
+	yaws_api:embedded_start_conf(DocRoot, Sconf, Gconf, Id),
+    ?debug("Yaws:~n"
+	   "  SC = ~p~n"
+	   "  GC = ~p~n"
+	   "  ChildSpecs = ~p~n", [SC, GC, ChildSpecs]),
+    exoport_sup:add_children(ChildSpecs),
+    yaws_api:setconf(GC, SC).
 
 id() -> "EXOPORT".
 docroot() -> filename:join(setup:home(), "www").
-
-opt(K, Opts, Def) ->
-    case lists:keyfind(K, 1, Opts) of
-	{_, V} -> V;
-	false  -> if is_function(Def, 0) -> Def();
-		     true -> Def
-		  end
-    end.
 
 sconf(Opts) ->
     opt(sconf, Opts, fun() -> default_sconf(Opts) end).
@@ -96,3 +91,15 @@ sconf_opts() ->
      tilde_allowed_scripts, index_files, revproxy, soptions, extra_cgi_vars,
      stats, fcgi_app_server, php_handler, shaper, deflate_options,
      mime_types_info, dispatchmod].
+
+
+%% ===================== Helper code ============================
+
+opt(K, Opts, Def) ->
+    case lists:keyfind(K, 1, Opts) of
+	{_, V} -> V;
+	false  -> if is_function(Def, 0) -> Def();
+		     true -> Def
+		  end
+    end.
+
