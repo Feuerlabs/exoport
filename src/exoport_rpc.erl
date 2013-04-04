@@ -9,7 +9,8 @@
 %%%---- END COPYRIGHT ---------------------------------------------------------
 -module(exoport_rpc).
 
--export([queue_rpc/2]).
+-export([queue_rpc/2,
+	 ignore/3]).
 -export([dispatch/2]).
 
 -include_lib("lager/include/log.hrl").
@@ -21,12 +22,14 @@ queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook) ->
 queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook, Env) when is_list(Env) ->
     kvdb:push(kvdb_conf, exoport, rpc,
 	      {1, [{on_return, ReturnHook}|Env], RPC}),
-    exoport_dispatcher:check_queue(exoport).
+    exoport_dispatcher:check_queue().
 
 %% @spec ignore(Reply, RPC, Env) -> ok
 %% @doc Dummy return hook; to use when return value is to be ignored.
 %% @end
-ignore(_, _, _) ->
+ignore(Reply, RPC, _Env) ->
+    io:fwrite("Ignoring return hook~n"
+	      "RPC = ~p; Reply = ~p~n", [RPC, Reply]),
     ok.
 
 dispatch({M, F, A} = RPC, Env) ->
@@ -34,8 +37,8 @@ dispatch({M, F, A} = RPC, Env) ->
 	case exoport:rpc(M, F, A) of
 	    {reply, Reply, []} ->
 		?debug("Reply: rpc(~p, ~p, ~p) -> ~p~n", [M,F,A,Reply]),
-		case lists:keyfind(on_return, Env) of
-		    {Mr,Fr} ->
+		case lists:keyfind(on_return, 1, Env) of
+		    {_, {Mr,Fr}} ->
 			Result = Mr:Fr(Reply, RPC, Env),
 			?debug("ReturnHook ~p:~p(~p, ~p) -> ~p~n",
 			       [Mr,Fr,Reply,RPC,Result]),

@@ -76,8 +76,7 @@ stop(_StartArgs) ->
 %% ===================================================================
 init(_Args) ->
     {ok, { {one_for_one, 5, 10},
-	   [{exoport_dispatcher, {exoport_dispatcher, start_link,
-				  [exoport, exoport_rpc, exoport_rpc]},
+	   [{exoport_dispatcher, {exoport_dispatcher, start_link,[]},
 	     permanent, 5000, worker, [exoport_dispatcher]},
 	    {exoport_server, {exoport_server, start_link, []},
 	     permanent, 5000, worker, [exoport_server]},

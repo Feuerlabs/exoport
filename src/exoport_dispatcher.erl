@@ -1,10 +1,12 @@
 -module(exoport_dispatcher).
 -behaviour(gen_server).
 
--export([check_queue/2]).
--export([attempt_dispatch/3,
+-export([check_queue/0, check_queue/2]).
+-export([attempt_dispatch/0,
+	 attempt_dispatch/1,
+	 attempt_dispatch/3,
 	 attempt_dispatch/4]).
--export([start_link/3]).
+-export([start_link/0, start_link/2]).
 -export([init/1,
 	 handle_call/3,
 	 handle_cast/2,
@@ -21,9 +23,25 @@
 
 -spec check_queue(kvdb:tab_name(),
 		  kvdb:queue_name()) -> pid() | {pending, pid()}.
+
+default_tab() ->
+    exoport.
+
+default_mod() ->
+    exoport_rpc.
+
+check_queue() ->
+    check_queue(default_tab(), default_mod()).
+
 check_queue(Tab, Q) ->
     ?debug("check_queue(~p, ~p)~n", [Tab, Q]),
     call(Tab, {check_queue, Q}).
+
+attempt_dispatch() ->
+    attempt_dispatch(kvdb_conf:instance()).
+
+attempt_dispatch(Db) ->
+    attempt_dispatch(Db, default_tab(), default_mod()).
 
 attempt_dispatch(Db, Tab, Q) ->
     attempt_dispatch(Db, Tab, Q, false).
@@ -40,11 +58,14 @@ call(Tab0, Req) ->
 	    gen_server:call(Pid, Req)
     end.
 
-start_link(Tab0, M, JobQ) ->
-    Tab = kvdb_lib:table_name(Tab0),
-    gen_server:start_link(?MODULE, {Tab, M, JobQ}, []).
+start_link() ->
+    start_link(default_tab(), default_mod()).
 
-init({Tab0, M, _JobQ} = Arg) ->
+start_link(Tab0, M) ->
+    Tab = kvdb_lib:table_name(Tab0),
+    gen_server:start_link(?MODULE, {Tab, M}, []).
+
+init({Tab0, M} = Arg) ->
     Tab = kvdb_lib:table_name(Tab0),
     gproc:reg({n, l, {?MODULE, Tab}}),
     try
