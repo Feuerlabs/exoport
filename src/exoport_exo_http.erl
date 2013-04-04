@@ -2,7 +2,8 @@
 -export([instance/1,
 	 handle_body/4,
 	 json_rpc/1,
-	 json_rpc/2]).
+	 json_rpc/2,
+	 data_to_json/3]).
 
 -include_lib("exo/include/exo_http.hrl").
 -include_lib("lager/include/log.hrl").
