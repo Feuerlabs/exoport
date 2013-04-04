@@ -10,36 +10,46 @@
 -module(exoport_rpc).
 
 -export([queue_rpc/2]).
--export([dispatch/1]).
+-export([dispatch/2]).
 
 -include_lib("lager/include/log.hrl").
 
 
 queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook) ->
-    kvdb:push(kvdb_conf, exoport, rpc, {1, [{on_return, ReturnHook}], RPC}),
+    queue_rpc(RPC, ReturnHook, []).
+
+queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook, Env) when is_list(Env) ->
+    kvdb:push(kvdb_conf, exoport, rpc,
+	      {1, [{on_return, ReturnHook}|Env], RPC}),
     exoport_dispatcher:check_queue(exoport).
 
-dispatch(Queue) ->
-    case kvdb:pop(kvdb_conf, Queue) of
-	{ok, {_, Env, {M,F,A} = RPC} = Entry} ->
-	    ?debug("POP: Entry = ~p~n", [Entry]),
-	    case exoport:rpc(M, F, A) of
-		{reply, Reply, []} ->
-		    ?debug("Reply: rpc(~p, ~p, ~p) -> ~p~n", [M,F,A,Reply]),
-		    case lists:keyfind(on_return, Env) of
-			{Mr,Fr} ->
-			    Result = Mr:Fr(Reply, RPC),
-			    ?debug("ReturnHook ~p:~p(~p, ~p) -> ~p~n",
-				   [Mr,Fr,Reply,RPC,Result]),
-			    ok;
-			false ->
-			    ok
-		    end;
-		Other ->
-		    ?debug("Unexpected reply from rpc(~p,~p,~p): ~p~n",
-			   [M, F, A, Other])
-	    end;
-	done ->
-	    ?debug("POP: done~n", []),
-	    ok
+%% @spec ignore(Reply, RPC, Env) -> ok
+%% @doc Dummy return hook; to use when return value is to be ignored.
+%% @end
+ignore(_, _, _) ->
+    ok.
+
+dispatch({M, F, A} = RPC, Env) ->
+    try
+	case exoport:rpc(M, F, A) of
+	    {reply, Reply, []} ->
+		?debug("Reply: rpc(~p, ~p, ~p) -> ~p~n", [M,F,A,Reply]),
+		case lists:keyfind(on_return, Env) of
+		    {Mr,Fr} ->
+			Result = Mr:Fr(Reply, RPC, Env),
+			?debug("ReturnHook ~p:~p(~p, ~p) -> ~p~n",
+			       [Mr,Fr,Reply,RPC,Result]),
+			ok;
+		    false ->
+			ok
+		end;
+	    Other ->
+		?debug("Unexpected reply from rpc(~p,~p,~p): ~p~n",
+		       [M, F, A, Other]),
+		error
+	end
+    catch
+	error:Error ->
+	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
+	    error
     end.

@@ -15,8 +15,7 @@
 -record(st, {tab, mod,
 	     queues = dict:new(),
 	     pids = dict:new(),
-	     pending = sets:new(),
-	     jobs_queue = default}).
+	     pending = dict:new()}).
 
 -include_lib("lager/include/log.hrl").
 
@@ -29,29 +28,23 @@ check_queue(Tab, Q) ->
 attempt_dispatch(Db, Tab, Q) ->
     attempt_dispatch(Db, Tab, Q, false).
 
-attempt_dispatch(Db, Tab, Q, Reply) when is_boolean(Reply) ->
-    call(Tab, {attempt_dispatch, Q, Db, Reply}).
+attempt_dispatch(Db, Tab, Q, DoReply) when is_boolean(DoReply) ->
+    call(Tab, {attempt_dispatch, Q, Db, DoReply}).
 
 call(Tab0, Req) ->
-    try
     Tab = kvdb_lib:table_name(Tab0),
     case gproc:where({n,l, {?MODULE, Tab}}) of
 	undefined ->
 	    error(noproc);
 	Pid when is_pid(Pid) ->
 	    gen_server:call(Pid, Req)
-    end
-    catch
-	error:Reason ->
-	    ?error("Crash in ~p:call(~p, ~p): ~p~n", [?MODULE,Tab0,Req,Reason]),
-	    error(Reason)
     end.
 
 start_link(Tab0, M, JobQ) ->
     Tab = kvdb_lib:table_name(Tab0),
     gen_server:start_link(?MODULE, {Tab, M, JobQ}, []).
 
-init({Tab0, M, JobQ} = Arg) ->
+init({Tab0, M, _JobQ} = Arg) ->
     Tab = kvdb_lib:table_name(Tab0),
     gproc:reg({n, l, {?MODULE, Tab}}),
     try
@@ -60,8 +53,7 @@ init({Tab0, M, JobQ} = Arg) ->
 	kvdb_schema_events:notify_all_queues(kvdb:db(kvdb_conf), Tab),
 	?debug("checking queues in ~p~n", [Tab]),
 	St = check_queues(kvdb:first_queue(kvdb_conf, Tab),
-			  #st{tab = Tab, mod = M,
-			      jobs_queue = JobQ}),
+			  #st{tab = Tab, mod = M}),
 	{ok, St}
     catch
 	error:E ->
@@ -74,7 +66,7 @@ init({Tab0, M, JobQ} = Arg) ->
 
 check_queues({ok, Q}, #st{tab = Tab} = St) ->
     ?debug("queue ~p in ~p not empty~n", [Q, Tab]),
-    {_, St1} = spawn_dispatcher(Q, St),
+    {_, St1} = spawn_dispatcher(Q, [], St),
     check_queues(kvdb:next_queue(kvdb_conf, Tab, Q), St1);
 check_queues(done, St) ->
     St.
@@ -90,16 +82,16 @@ handle_info({'DOWN', _, _, Pid, _}, #st{pids = Pids, queues = Qs,
 					pending = Pending} = St) ->
     St1 = case dict:find(Pid, Pids) of
 	      {ok, Q} ->
-		  case sets:is_element(Q, Pending) of
-		      true ->
+		  case dict:find(Q, Pending) of
+		      {ok, ReplyTo} ->
 			  {_, NewSt} =
 			      spawn_dispatcher(
-				Q, St#st{pids = dict:erase(Pid, Pids),
-					 queues = dict:erase(Q, Qs),
-					 pending = sets:del_element(
-						     Q, Pending)}),
+				Q, ReplyTo,
+				St#st{pids = dict:erase(Pid, Pids),
+				      queues = dict:erase(Q, Qs),
+				      pending = dict:erase(Q, Pending)}),
 			  NewSt;
-		      false ->
+		      error ->
 			  St#st{pids = dict:erase(Pid, Pids),
 				queues = dict:erase(Q, Qs)}
 		  end;
@@ -114,16 +106,17 @@ handle_info(_Msg, St) ->
 handle_call({check_queue, Q}, _From, St) ->
     {Res, St1} = check_queue_(Q, St),
     {reply, Res, St1};
-handle_call({attempt_dispatch, Q, Db, Reply}, From, #st{queues = Qs} = St) ->
+handle_call({attempt_dispatch, Q, Db, DoReply},
+	    From, #st{queues = Qs} = St) ->
     case dict:find(Q, Qs) of
 	error ->
-	    DbArg = if Reply -> Db;
-		       true -> kvdb:db_name(Db)
-		    end,
-	    {Pid, St1} = spawn_dispatcher(Q, DbArg, From, Reply, St),
+	    {DbArg, Reply} = if DoReply -> {Db, [From]};
+				true -> {kvdb:db_name(Db), []}
+			     end,
+	    {Pid, St1} = spawn_dispatcher(Q, DbArg, Reply, St),
 	    {reply, {ok, Pid}, St1};
 	{ok, CurPid} ->
-	    {_, St1} = mark_pending(CurPid, Q, St),
+	    {_, St1} = mark_pending(CurPid, Q, From, St),
 	    {reply, pending, St1}
     end;
 handle_call(_, _, St) ->
@@ -138,34 +131,39 @@ code_change(_, St, _) -> {ok, St}.
 check_queue_(Q, #st{queues = Qs} = St) ->
     case dict:find(Q, Qs) of
 	error ->
-	    spawn_dispatcher(Q, St);
+	    spawn_dispatcher(Q, [], St);
 	{ok, CurPid} ->
-	    mark_pending(CurPid, Q, St)
+	    mark_pending(CurPid, Q, false, St)
     end.
 
-mark_pending(CurPid, Q, #st{pending = Pending} = St) ->
-    {{pending, CurPid},
-     St#st{pending = case sets:is_element(Q, Pending) of
-			 true -> Pending;
-			 false -> sets:add_element(Q, Pending)
-		     end}}.
+mark_pending(CurPid, Q, Reply, #st{pending = Pending} = St) ->
+    P1 = case Reply of
+	     false ->
+		 case dict:find(Q, Pending) of
+		     {ok, _} -> Pending;
+		     error   -> dict:store(Q, [], Pending)
+		 end;
+	     From ->
+		 dict:append(Q, From, Pending)
+	 end,
+    {{pending, CurPid}, St#st{pending = P1}}.
 
-spawn_dispatcher(Q, St) ->
-    spawn_dispatcher(Q, kvdb_conf, undefined, false, St).
+spawn_dispatcher(Q, Reply, St) ->
+    spawn_dispatcher(Q, kvdb_conf, Reply, St).
 
-spawn_dispatcher(Q, Db, From, Reply, #st{tab = Tab, pids = Pids, queues = Qs,
-					 jobs_queue = JobsQ} = St) ->
+spawn_dispatcher(Q, Db, Reply, #st{tab = Tab, pids = Pids,
+				   queues = Qs} = St) ->
     {Pid, _} = spawn_monitor(
 		 fun() ->
-			 run_dispatcher(JobsQ, Db, Tab, Q, From, Reply)
+			 run_dispatcher(Db, Tab, Q, Reply)
 		 end),
     {Pid, St#st{pids = dict:store(Pid, Q, Pids),
 		queues = dict:store(Q, Pid, Qs)}}.
 
-run_dispatcher(JobsQ, Db, Tab, Q, From, Reply) ->
+run_dispatcher(Db, Tab, Q, Reply) ->
     try
 	timer:sleep(500),
-	dispatch(Db, Tab, Q, JobsQ, From, Reply)
+	dispatch(Db, Tab, Q, Reply)
     catch
 	Type:Exception ->
 	    ?error("Dispatch thread exception: ~p:~p~n~p~n",
@@ -174,14 +172,14 @@ run_dispatcher(JobsQ, Db, Tab, Q, From, Reply) ->
 
 
 
-dispatch(Db, Tab, Q, JobsQ, From, Reply) ->
+dispatch(Db, Tab, Q, Reply) ->
     ?debug("dispatch(~p, ~p)~n", [Tab, Q]),
     try
-	case exodm_rpc_handler:device_sessions(Q) of
-	    [_|_] = Sessions ->
-		pop_and_dispatch(From, Reply, Db, Tab, Q, JobsQ, Sessions);
-	    [] ->
-		done(From, Reply)
+	case exoport_server:session_active() of
+	    true ->
+		pop_and_dispatch(Reply, Db, Tab, Q);
+	    false ->
+		done(Reply)
 	end
     catch
 	error:Reason ->
@@ -189,17 +187,17 @@ dispatch(Db, Tab, Q, JobsQ, From, Reply) ->
 		   [?MODULE,Reason, erlang:get_stacktrace()])
     end.
 
-pop_and_dispatch(_, false, Db, Tab, Q, JobsQ, Sessions) ->
+pop_and_dispatch(false, Db, Tab, Q) ->
     kvdb:transaction(
       Db,
       fun(Db1) ->
-	      until_done(Db1, Tab, Q, JobsQ, Sessions)
+	      until_done(Db1, Tab, Q)
 	   end);
-pop_and_dispatch(From, Reply, Db, Tab, Q, JobsQ, Sessions) ->
+pop_and_dispatch(Reply, Db, Tab, Q) ->
     case kvdb:in_transaction(
 	   Db,
 	   fun(Db1) ->
-		   pop_and_dispatch_(From, Reply, Db1, Tab, Q, JobsQ, Sessions)
+		   pop_and_dispatch_(Reply, Db1, Tab, Q)
 	   end) of
 	done ->
 	    done;
@@ -207,20 +205,20 @@ pop_and_dispatch(From, Reply, Db, Tab, Q, JobsQ, Sessions) ->
 	    kvdb:transaction(
 	      kvdb_conf,
 	      fun(Db1) ->
-		      until_done(Db1, Tab, Q, JobsQ, Sessions)
+		      until_done(Db1, Tab, Q)
 	      end)
     end.
 
-until_done(Db, Tab, Q, JobsQ, Sessions) ->
-    case pop_and_dispatch_(undefined, false, Db, Tab, Q, JobsQ, Sessions) of
+until_done(Db, Tab, Q) ->
+    case pop_and_dispatch_([], Db, Tab, Q) of
 	done -> done;
-	next -> until_done(Db, Tab, Q, JobsQ, Sessions)
+	next -> until_done(Db, Tab, Q)
     end.
 
-done({Pid, _}, true) ->
-    Pid ! {self(), ?MODULE, done},
+done([]) ->
     done;
-done(_, _) ->
+done(ReplyTo) ->
+    [Pid ! {self(), ?MODULE, done} || {Pid,_} <- ReplyTo],
     done.
 
 
@@ -228,46 +226,22 @@ done(_, _) ->
 %% store, and need to ack to the transaction master that we're done. Note that
 %% *we* delete the object if successful, so the master may be committing an
 %% empty set (which is ok).
-pop_and_dispatch_(From, Reply, Db, Tab, Q, JobsQ, Sessions) ->
-    ?debug("pop_and_dispatch_(~p, ~p, ~p, ~p, ~p)~n",
-	   [Db, Tab, Q, Sessions, From]),
-    jobs:run(
-      JobsQ, fun() ->
-		     pop_and_dispatch_run_(From, Reply, Db, Tab, Q, Sessions)
-	     end).
-
-pop_and_dispatch_run_(From, Reply, Db, Tab, Q, Sessions) ->
-    case kvdb:pop(Db, Tab, Q) of
+pop_and_dispatch_(Reply, Db, Tab, Q) ->
+    ?debug("pop_and_dispatch_(~p, ~p, ~p)~n",
+	   [Db, Tab, Q]),
+    case kvdb:peek(Db, Tab, Q) of
 	done ->
-	    done(From, Reply);
-	{ok, {_, Env, Req} = Entry} ->
-	    ?debug("POP: Entry = ~p~n", [Entry]),
-	    set_user(Env, Db),
-	    {AID, DID} = exodm_db_device:dec_ext_key(Q),
-	    Protocol = exodm_db_device:protocol(AID, DID),
-	    case lists:keyfind(Protocol, 2, Sessions) of
-		{Pid, _} ->
-		    Mod = exodm_rpc_protocol:module(Protocol),
-		    ?debug("Calling ~p:dispatch(~p, ~p, ~p, ~p)~n",
-			   [Mod, Env, AID, DID, Pid]),
-		    case Mod:dispatch(Tab, Req, Env, AID,
-				      exodm_db:decode_id(DID), Pid) of
-			error ->
-			    done(From, Reply);
-			_Result ->
-			    done(From, Reply),
-			    next
-		    end;
-		false ->
-		    ?error("No matching protocol session for ~p (~p)~n"
-			   "Entry now blocking queue~n",
-			   [Entry, Sessions]),
-		    done(From, Reply)
+	    done(Reply);
+	{ok, QK, {_, Env, RPC} = Entry} ->
+	    ?debug("PEEK: Entry = ~p~n", [Entry]),
+	    case exoport_rpc:dispatch(RPC, Env) of
+		error ->
+		    done(Reply);
+		_Result ->
+		    ?debug("Valid result (~p); deleting queue object~n",
+			   [_Result]),
+		    _DeleteRes = kvdb:queue_delete(Db, Tab, QK),
+		    ?debug("Delete (~p) -> ~p~n", [QK, _DeleteRes]),
+		    next
 	    end
     end.
-
-
-set_user(Env, Db) ->
-    {_, UID} = lists:keyfind(user, 1, Env),
-    exodm_db_session:logout(),
-    exodm_db_session:set_auth_as_user(UID, Db).
