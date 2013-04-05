@@ -20,9 +20,14 @@ queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook) ->
     queue_rpc(RPC, ReturnHook, []).
 
 queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook, Env) when is_list(Env) ->
-    kvdb:push(kvdb_conf, exoport, rpc,
-	      {1, [{on_return, ReturnHook}|Env], RPC}),
-    exoport_dispatcher:check_queue().
+    Res = kvdb_conf:in_transaction(
+	    fun(_) ->
+		    kvdb:push(kvdb_conf, exoport, rpc,
+			      {1, [{on_return, ReturnHook}|Env], RPC})
+	    end),
+    exoport_dispatcher:check_queue(),
+    Res.
+
 
 %% @spec ignore(Reply, RPC, Env) -> ok
 %% @doc Dummy return hook; to use when return value is to be ignored.
