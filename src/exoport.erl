@@ -26,10 +26,14 @@
 	 configure/1, configure/2,
 	 reload_conf/0]).
 
+-export([get_env_var/2]).
+
 -include_lib("bert/include/bert.hrl").
 -include_lib("lager/include/log.hrl").
 
 -define(ACCESS_FILE,"rpc_access.conf").
+
+-define(ENV_VAR_PREFIX,"EXO_").
 
 %% helper when starting from command line
 start() ->
@@ -80,13 +84,17 @@ notify(Module, Method, Info) ->
 disconnect() ->
     exoport_server:disconnect().
 
+
 configure(FileOrOpts) ->
     configure(FileOrOpts, _Reload = true).
 
 configure(FileOrOpts, Reload) when is_boolean(Reload) ->
     io:fwrite("configure(~p, ~p)~n", [FileOrOpts, Reload]),
+    EnvTerms = get_env_var("EXO_", os:getenv()),
+    io:fwrite("environ(~p)~n", [EnvTerms]),
     case consult_config(FileOrOpts) of
-	{ok, Terms} ->
+	{ok, CfgTerms} ->
+	    Terms = lists:keymerge(1, CfgTerms, EnvTerms),
 	    io:fwrite("config Terms = ~p~n", [Terms]),
 	    config_exodm_addr(Terms),
 	    config_device_id(Terms),
@@ -101,6 +109,25 @@ configure(FileOrOpts, Reload) when is_boolean(Reload) ->
 	    Error
     end.
 
+%% If the environment variable in Var starts with MatchPrefix, return
+%% a new key-val element with the extracted variable and recursively
+%% call self with T.
+%% Each element added to the list will be stripped of its prefix and
+%% converted to lowercase
+get_env_var(MatchPrefix, [ Var | T]) ->
+    EqInd = string:chr(Var, $=),
+    PrefixLen = string:len(MatchPrefix),
+    case string:equal(string:substr(Var, 1, PrefixLen), MatchPrefix) of
+	true ->
+	    [ { list_to_atom(string:to_lower(string:substr(Var, PrefixLen + 1, EqInd - PrefixLen - 1))),
+		string:substr(Var, EqInd + 1) } ] ++ get_env_var(MatchPrefix, T);
+	_ -> get_env_var(MatchPrefix, T)
+    end;
+
+get_env_var(_MatchPrefix, []) ->
+    [].
+
+
 consult_config([T|_] = Config) when is_tuple(T) ->
     {ok, Config};
 consult_config({script, File}) ->
@@ -109,30 +136,38 @@ consult_config([I|_] = File) when is_integer(I) ->
     file:consult(File).
 
 
+
+
 reload_conf() ->
     supervisor:terminate_child(exoport_sup, bert_rpc_exec),
     supervisor:restart_child(exoport_sup, bert_rpc_exec).
 
 config_exodm_addr(Opts) ->
-    Host = alt_opt([exodm_host, host], Opts, "localhost"),
-    Port = alt_opt([exodm_port, port], Opts, 9900),
+    Host = alt_opt([exodm_host, host, exo_host], Opts, "localhost"),
+    Port = alt_opt([exodm_port, port, exo_port], Opts, 9900),
     application:set_env(exoport, exodm_address, {Host, Port}),
     true.
 
 config_device_id(Opts) ->
-    case alt_opt([device_id, 'device-id'], Opts) of
-	undefined ->
-	    false;
-	ID ->
-	    Ck = alt_opt([ckey, 'client-key'], Opts, 0),
-	    Sk = alt_opt([skey, 'server-key'], Opts, 0),
+    DeviceID = alt_opt([device_id, 'device-id'], Opts, undefined),
+    Account = alt_opt([account], Opts, undefined),
+    DeviceKey = alt_opt([ckey, 'client-key', 'device-key', 'device_key', 'client_key'], Opts, undefined),
+    ServerKey = alt_opt([skey, 'server-key', 'server_key'], Opts, undefined),
+
+    if
+	DeviceID =:= undefined -> false;
+	Account =:= undefined -> false;
+	DeviceKey =:= undefined -> false;
+	ServerKey =:= undefined -> false;
+	true ->
+	    InternalDeviceID = to_binary("*" ++ Account ++ "*" ++ DeviceID),
 	    application:set_env(bert, reuse_mode, client),
 	    application:set_env(
 	      bert, auth, [
-			   {id, to_binary(ID)},
+			   {id, InternalDeviceID},
 			   {client, [
-                                     {id, to_binary(ID)},
-				     {keys, {uint64(Ck), uint64(Sk)}},
+                                     {id, InternalDeviceID},
+				     {keys, {uint64(DeviceKey), uint64(ServerKey)}},
 				     {mod, bert_challenge}
 				    ]}
 			  ]),
@@ -160,7 +195,8 @@ start_rpc_server() ->
 	    io:fwrite("Preset exoport config: ~p~n", [Cfg]),
 	    configure(Cfg, false);
 	undefined ->
-	    ok
+	    io:fwrite("No exoport config file given. Will use environment", []),
+	    configure(environment)
     end,
     {ok, Access} = load_access(),
     %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
@@ -217,9 +253,6 @@ opt_env(K, Default) ->
         undefined ->
             Default
     end.
-
-alt_opt(Keys, Opts) ->
-    alt_opt(Keys, Opts, undefined).
 
 alt_opt([H|T], Opts, Default) ->
     case lists:keyfind(H, 1, Opts) of
