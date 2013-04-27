@@ -117,7 +117,7 @@ configure(FileOrOpts, Reload) when is_boolean(Reload) ->
 get_env_var(MatchPrefix, [ Var | T]) ->
     EqInd = string:chr(Var, $=),
     PrefixLen = string:len(MatchPrefix),
-    case string:equal(string:substr(Var, 1, PrefixLen), MatchPrefix) of
+    case string:equal(string:to_lower(string:substr(Var, 1, PrefixLen)), string:to_lower(MatchPrefix)) of
 	true ->
 	    [ { list_to_atom(string:to_lower(string:substr(Var, PrefixLen + 1, EqInd - PrefixLen - 1))),
 		string:substr(Var, EqInd + 1) } ] ++ get_env_var(MatchPrefix, T);
@@ -153,6 +153,11 @@ config_device_id(Opts) ->
     Account = alt_opt([account], Opts, undefined),
     DeviceKey = alt_opt([ckey, 'client-key', 'device-key', 'device_key', 'client_key'], Opts, undefined),
     ServerKey = alt_opt([skey, 'server-key', 'server_key'], Opts, undefined),
+
+    io:format("DeviceID(~p)~n", [DeviceID]),
+    io:format("Account(~p)~n", [Account]),
+    io:format("DeviceKey(~p)~n", [DeviceKey]),
+    io:format("ServerKey(~p)~n", [ServerKey]),
 
     if
 	DeviceID =:= undefined -> false;
