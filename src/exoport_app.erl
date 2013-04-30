@@ -49,7 +49,7 @@
 
 start(_StartType, _StartArgs) ->
     error_logger:info_msg("~p: start: arguments ignored.\n", [?MODULE]),
-    Opts = case application:get_env(options) of
+    Opts = case application:get_all_env(exoport) of
 	       undefined -> [];
 	       {ok, O} -> O
 	   end,

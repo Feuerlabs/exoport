@@ -40,7 +40,7 @@ start() ->
     start([]).
 
 start(Opts) ->
-    Apps = [crypto, public_key, gproc, exo, bert, kvdb, exoport],
+    Apps = [crypto, public_key, exo, bert, gproc, kvdb, exoport],
     [application:load(A) || A <- Apps],
     lists:foreach(fun({config, Cfg}) ->
 			  configure(Cfg, false);
@@ -53,8 +53,17 @@ start(Opts) ->
 				  error({not_allowed, [set_env, {A,K,V}]})
 			  end
 		  end, Opts),
-    [application:start(A) || A <- Apps],
+    [started(application:start(A),A) || A <- Apps],
     ok.
+
+started(ok,_) ->
+    ok;
+started({error, {already_started,_}},_) ->
+    ok;
+started(Other, A) ->
+    error({Other, [{application, A}]}).
+
+
 
 rpc_auth_options() ->
     case application:get_env(exoport, auth) of
