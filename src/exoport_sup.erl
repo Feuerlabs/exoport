@@ -49,7 +49,8 @@
 			{error, Error::term()}.
 
 start_link(Args) ->
-    error_logger:info_msg("~p: start_link: args = ~p\n", [?MODULE, Args]),
+    error_logger:info_msg("~p: start_link: Available environment = ~p\n", 
+			  [?MODULE, Args]),
     case supervisor:start_link({local, ?MODULE}, ?MODULE, Args) of
 	{ok, Pid} ->
 	    {ok, Pid, {normal, Args}};

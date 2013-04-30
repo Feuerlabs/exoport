@@ -40,7 +40,7 @@ start() ->
     start([]).
 
 start(Opts) ->
-    Apps = [crypto, public_key, exo, bert, kvdb, exoport],
+    Apps = [crypto, public_key, gproc, exo, bert, kvdb, exoport],
     [application:load(A) || A <- Apps],
     lists:foreach(fun({config, Cfg}) ->
 			  configure(Cfg, false);
