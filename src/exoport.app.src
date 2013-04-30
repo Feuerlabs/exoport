@@ -9,7 +9,10 @@
   {applications, [
                   kernel,
                   stdlib,
-		  bert
+                  exo,
+		  bert,
+                  gproc,
+                  kvdb
                  ]},
   {mod, { exoport_app, []}},
   {start_phases, [{load_yang_specs, []},
