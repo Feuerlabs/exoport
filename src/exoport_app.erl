@@ -49,12 +49,11 @@
 
 start(_StartType, _StartArgs) ->
     error_logger:info_msg("~p: start: arguments ignored.\n", [?MODULE]),
-    Opts = case application:get_all_env(exoport) of
+    Env = case application:get_all_env(exoport) of
 	       undefined -> [];
-	       {ok, O} -> O
+	       O -> O
 	   end,
-    Args = [{options, Opts}],
-    exoport_sup:start_link(Args).
+    exoport_sup:start_link(Env).
 
 start_phase(start_http, _, _) ->
     exoport_http:instance(),

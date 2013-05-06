@@ -14,7 +14,7 @@
 
 -module(exoport).
 
--export([start/0, start/1,
+-export([start/0, start/1, start/2,
 	 start_rpc_server/0]).
 
 -export([rpc_auth_options/0]).
@@ -40,7 +40,9 @@ start() ->
     start([]).
 
 start(Opts) ->
-    Apps = [crypto, public_key, exo, bert, gproc, kvdb, exoport],
+    start(Opts, [crypto, public_key, exo, bert, gproc, kvdb, exoport]).
+
+start(Opts, Apps) ->
     [application:load(A) || A <- Apps],
     lists:foreach(fun({config, Cfg}) ->
 			  configure(Cfg, false);
@@ -61,6 +63,8 @@ started(ok,_) ->
 started({error, {already_started,_}},_) ->
     ok;
 started(Other, A) ->
+    error_logger:error_msg("Failed starting app ~p, reason ~p",
+			   [A, Other]),
     error({Other, [{application, A}]}).
 
 
@@ -202,8 +206,7 @@ uint64(<<_:64>> = Bin) ->
 
 
 start_rpc_server() ->
-    error_logger:info_msg("~p: start_rpc_server: pid = ~p\n",
-                          [?MODULE, self()]),
+    error_logger:info_msg("~p: start_rpc_server: pid = ~p", [?MODULE, self()]),
     case application:get_env(exoport, config) of
 	{ok, Cfg} ->
 	    io:fwrite("Preset exoport config: ~p~n", [Cfg]),

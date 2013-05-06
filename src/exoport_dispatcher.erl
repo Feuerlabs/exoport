@@ -66,8 +66,12 @@ start_link(Tab0, M) ->
     gen_server:start_link(?MODULE, {Tab, M}, []).
 
 init({Tab0, M} = Arg) ->
+    error_logger:info_msg("~p: init: arg ~p,  pid = ~p",
+                          [?MODULE, Arg, self()]),
     Tab = kvdb_lib:table_name(Tab0),
+    ?debug("init: table ~p", [Tab]),
     gproc:reg({n, l, {?MODULE, Tab}}),
+    ?debug("init: registered.", []),
     try
 	ok = kvdb_conf:add_table(Tab, [{type, fifo},
 				       {encoding, {raw,sext,sext}}]),

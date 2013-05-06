@@ -56,6 +56,7 @@ disconnect() ->
     gen_server:call(?MODULE, disconnect, infinity).
 
 init(_) ->
+    error_logger:info_msg("~p: init: pid = ~p", [?MODULE, self()]),
     St0 = #st{},
     Auto = case application:get_env(exoport, auto_connect) of
 	       {ok, B} when is_boolean(B) ->
