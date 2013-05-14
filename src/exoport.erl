@@ -81,6 +81,7 @@ ping() ->
     rpc(exodm_rpc, ping, []).
 
 rpc(M, F, A) ->
+    lager:debug("rpc: M = ~p, F = ~p, A = ~p.", [M, F, A]),
     exoport_server:rpc(M, F, A).
 %% rpc(M, F, A) ->
 %%     case application:get_env(exoport, exodm_address) of
