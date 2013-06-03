@@ -80,13 +80,13 @@ stop(_State) ->
 load_yang_specs() ->
     Mods = setup:find_env_vars(yang_spec_modules),
     lists:foreach(
-      fun({_AppName, Pats} = P) ->
-	      io:fwrite("Yang spec module pat: ~p~n", [P]),
-	      apply_pats(Pats)
+      fun({_AppName, Paths} = P) ->
+	      io:fwrite("Yang spec module path: ~p~n", [P]),
+	      apply_paths(Paths)
       end, Mods).
 
-apply_pats([{Dir, FilePat}|Ps]) ->
-    Files = filelib:wildcard(FilePat, Dir),
+apply_paths([{Dir, FilePath}|Ps]) ->
+    Files = filelib:wildcard(FilePath, Dir),
     lists:foreach(
       fun(F) ->
 	      case filename:extension(F) of
@@ -98,7 +98,7 @@ apply_pats([{Dir, FilePat}|Ps]) ->
 		      io:fwrite("Skipping ~s~n", [F])
 	      end
       end, Files),
-    apply_pats(Ps);
-apply_pats([]) ->
+    apply_paths(Ps);
+apply_paths([]) ->
     ok.
 
