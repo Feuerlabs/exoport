@@ -101,7 +101,8 @@ handle_call(disconnect, _, #st{session = Session} = St) ->
     {reply, Res, St#st{session = undefined}};
 handle_call(session_active, _, #st{session = S} = St) ->
     {reply, S =/= undefined, St};
-handle_call(_, _, St) ->
+handle_call(_Call, _, St) ->
+    ?debug("unknown call ~p in state ~p.", [_Call, St]),
     {reply, {error, unknown_call}, St}.
 
 handle_cast(_, St) ->
