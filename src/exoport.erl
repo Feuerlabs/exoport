@@ -14,10 +14,13 @@
 
 -module(exoport).
 
--export([start/0, start/1, start/2,
+-export([start/0, 
+	 start/1, 
+	 start/2,
 	 start_rpc_server/0]).
 
--export([rpc_auth_options/0]).
+-export([rpc_auth_options/0,
+	 access/0]).
 
 -export([ping/0,
 	 rpc/3,
@@ -205,7 +208,6 @@ uint64(L) when is_list(L) ->
 uint64(<<_:64>> = Bin) ->
     Bin.
 
-
 start_rpc_server() ->
     error_logger:info_msg("~p: start_rpc_server: pid = ~p", [?MODULE, self()]),
     case application:get_env(exoport, config) of
@@ -216,8 +218,13 @@ start_rpc_server() ->
 	    io:fwrite("No exoport config file given. Will use environment", []),
 	    configure(environment)
     end,
-    {ok, Access} = load_access(),
-    %% NewOpts = [{access, Access} | lists:keydelete(access, 1, Opts)],
+    Args = rpc_server_args(),
+    error_logger:info_msg("~p: About to start bert_rpc_exec. ~n"
+			  "Args = ~p~n", [?MODULE, Args]),
+    bert_rpc_exec:start_link(Args).
+
+rpc_server_args() ->
+    {ok, Access} = access(),
     io:fwrite("All Env = ~p~n", [application:get_all_env(exoport)]),
     BertPort = opt_env(bert_port, ?BERT_PORT),
     io:fwrite("BertPort = ~p~n", [BertPort]),
@@ -232,19 +239,18 @@ start_rpc_server() ->
                        AuthOpts;
                    _ -> false
                end,
-    NewOpts = [{access, Access}, {port, BertPort},
-               {exo, [{reuse_mode, BertReuse},
-                      {auth, BertAuth}]}],
-    error_logger:info_msg("~p: About to start bert_rpc_exec~n"
-			  "Opts = ~p~n", [?MODULE, NewOpts]),
-    bert_rpc_exec:start_link(NewOpts).
+    [{access, Access}, 
+     {port, BertPort},
+     {exo, [{reuse_mode, BertReuse},
+	    {auth, BertAuth}]}].
 
-load_access() ->
+
+access() ->
     case application:get_env(exoport, access) of
         {ok, {file, F}} ->
-            load_access(F);
+            access(F);
         undefined ->
-            load_access(?ACCESS_FILE);
+            access(?ACCESS_FILE);
         {ok, []} ->
             {ok, []};
         {ok, [_|_] = Access} when is_tuple(hd(Access)) ->
@@ -252,7 +258,7 @@ load_access() ->
     end.
 
 
-load_access(FileName) ->
+access(FileName) ->
     Dir = code:priv_dir(exoport),
     File = filename:join(Dir, FileName),
     case filelib:is_regular(File) of
