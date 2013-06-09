@@ -20,7 +20,8 @@
 
 %% api
 -export([start_link/1, 
-	 stop/0]).
+	 stop/0,
+	 dump/0]).
 
 %% gen_server callbacks
 -export([init/1, 
@@ -30,8 +31,10 @@
 	 terminate/2, 
 	 code_change/3]).
 
+-compile(export_all).
+
 -define(SERVER, ?MODULE). 
--define(EXODM_RE, "^EXODM-RPC: ([0-9A-Fa-f] [0-9A-Fa-f])*").
+-define(EXODM_RE, "^EXODM-RPC:(sms|gprs)(,(sms|gprs))*:([0-9A-Fa-f][0-9A-Fa-f])*").
 
 -define(dbg(Format, Args),
 	lager:debug("~s(~p): " ++ Format, [?MODULE, self() | Args])).
@@ -82,6 +85,11 @@ stop() ->
     gen_server:call(?SERVER, stop).
 
 
+%% Test functions
+%% @private
+dump() ->
+    gen_server:call(?SERVER, dump).
+
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -101,9 +109,11 @@ init(Args) ->
     lager:info("~p: init: args = ~p,\n pid = ~p\n", [?MODULE, Args, self()]),
     Anums = case application:get_env(exoport, anumbers) of
 	       undefined -> [];
-	       A -> A
+	       {ok, A} -> A
 	   end,
+    ?dbg("init: A numbers ~p",[Anums]),
     Filter = create_filter(Anums),
+    ?dbg("init: filter ~p",[Filter]),
     Ref = gsms_router:subscribe(Filter),
     {ok, #ctx {state = up, ref = Ref, anumbers = Anums}}.
 
@@ -182,9 +192,15 @@ handle_info({gsms, _Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info,
     %% Check ref ??
     
     case string:tokens(Msg, ":") of
-	["EXODM-RPC:", ReplyMethods, Call] -> 
-	    Reply = execute_call(Call),
-	    reply(Reply, ReplyMethods, Addr);
+	["EXODM-RPC", ReplyMethods, Call] -> 
+	    handle_request(from_hex(string:strip(Call)), 
+			   string:strip(ReplyMethods), 
+			   Addr);
+	["EXODM-RPC", Call] -> 
+	    %% default
+	    handle_request(from_hex(string:strip(Call)), 
+			   ["sms"], Addr);
+	    
 	_ ->
 	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
 	    do_nothing
@@ -240,37 +256,66 @@ create_filter(Anums) ->
     
 
 %%--------------------------------------------------------------------
-execute_call(Call) ->
-    try 
-	MFA = {M, F, A} = bert:to_term(Call),
-	?dbg("execute_call: ~p", [MFA]),
-	bert:to_binary(apply(M,F,A))
-    catch
-	error:Error ->
-	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
-	    bert:to_binary({error, illegal_call})
-    end.
-
-%%--------------------------------------------------------------------
-reply(Reply, MethodsString, Addr) ->
-    Methods = [list_to_atom(M) || M <- string:tokens(MethodsString, ",")],
-    reply_all(Reply, Methods, Addr).
+handle_request(Request, MethodsString, Addr) ->
+    Methods = [list_to_atom(string:strip(M)) || 
+		  M <- string:tokens(MethodsString, ",")],
+    exec_req(Request, Methods, Addr).
     
-reply_all(_Reply, [],  _Addr) ->
-    ?dbg("reply: no one to reply to", []);
-reply_all(Reply, [Method | Methods], Addr) ->
-    case reply_one(Reply, Method, Addr) of 
+exec_req(_Request, [],  _Addr) ->
+    ?dbg("request: no one to reply to", []);
+exec_req(Request, [Method | Methods], Addr) ->
+    case exec_req1(Request, Method, Addr) of 
 	ok -> 
-	    ?dbg("reply: sent using ~p", [Method]),
 	    ok;
 	{error, Error} ->
-	    ?dbg("reply: failed using ~p, reason ~p", 
+	    ?dbg("request: failed using ~p, reason ~p", 
 		 [Method, Error]),
-	    reply_all(Reply, Methods, Addr)
+	    %% Try next method
+	    exec_req(Request, Methods, Addr)
     end.
 	    
-reply_one(Reply, sms, Addr) ->
-    gsms_router:send([{anumber, Addr}], Reply);
-reply_one(Reply, gprs, _Addr) ->
-    %%
-    ok.
+exec_req1(Request, sms, Addr) ->
+    ?dbg("request: sms", []),
+    Reply = 
+	try exec_req(Request, external) of
+	    Result -> Result
+	catch
+	    error:Error ->
+		?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
+		bert:to_binary({error, illegal_call})
+	end,
+    ?dbg("request: reply ~p", [bert:to_term(Reply)]),
+    case gsms_router:send([{addr, Addr}], to_hex(Reply)) of
+	{ok, _Ref} -> ok;
+	E -> E
+    end;
+exec_req1(Request, gprs, _Addr) ->
+    ?dbg("request: gprs", []),
+    %% Make sure we are connected
+    case exoport_server:session_active() of
+	true -> ok;
+	_ -> exoport_server:connect()
+    end,
+    %% Reply sent over socket
+    exec_req(Request, internal);
+exec_req1(_Request, Unknown, _Addr) ->
+    ?dbg("request: unknown method ~p", [Unknown]),
+    {error, unknown_method}.
+
+
+exec_req(Request, ExtOrInt) ->
+    DecodedReq = bert:to_term(Request),
+    ?dbg("request: ~p", [DecodedReq]),
+    bert:to_binary(bert_rpc_exec:request(DecodedReq, ExtOrInt)).
+
+from_hex(String) when is_list(String) ->
+    << << (erlang:list_to_integer([H], 16)):4 >> || H <- String >>.
+
+%% convert to hex
+to_hex(Bin) when is_binary(Bin) ->
+    [ element(I+1,{$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
+                   $a,$b,$c,$d,$e,$f}) || <<I:4>> <= Bin];
+to_hex(List) when is_list(List) ->
+    to_hex(list_to_binary(List));
+to_hex(Int) when is_integer(Int) ->
+    integer_to_list(Int, 16).
