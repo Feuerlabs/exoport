@@ -29,6 +29,9 @@
 -define(dbg(Format, Args),
  	lager:debug("~s(~p): " ++ Format, 
 		    [?MODULE, self() | Args])).
+-define(dbg(Format),
+ 	lager:debug("~s(~p): " ++ Format, 
+		    [?MODULE, self()])).
 
 %% Convenience defines 
 -ifndef(ee).

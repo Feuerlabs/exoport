@@ -44,6 +44,7 @@ start() ->
     start([]).
 
 start(Opts) ->
+    application:load(exoport),
     Apps = 
 	case {application:get_env(exoport, gsms),
 	      application:get_env(exoport, ppp_provider)} of
