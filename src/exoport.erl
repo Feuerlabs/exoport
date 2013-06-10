@@ -13,6 +13,7 @@
 %%% Created : 24 May 2012 by Tony Rogvall <tony@rogvall.se>
 
 -module(exoport).
+-include("exoport.hrl").
 
 -export([start/0, 
 	 start/1, 
@@ -43,7 +44,21 @@ start() ->
     start([]).
 
 start(Opts) ->
-    start(Opts, [crypto, public_key, exo, bert, gproc, kvdb, exoport]).
+    Apps = 
+	case {application:get_env(exoport, gsms),
+	      application:get_env(exoport, ppp_provider)} of
+	    {{ok, true}, {ok, _Provider}} ->
+		[crypto, public_key, exo, bert, gproc, kvdb, 
+		 uart, gsms, netlink, pppd_mgr, exoport];
+	    {{ok, true}, _} -> 
+		[crypto, public_key, exo, bert, gproc, kvdb, 
+		 uart, gsms, exoport];
+	    _ -> 
+		[crypto, public_key, exo, bert, gproc, kvdb, exoport]
+	end,
+    ?dbg("apps needed ~p.\n", [Apps]),
+    start(Opts, Apps).
+    
 
 start(Opts, Apps) ->
     [application:load(A) || A <- Apps],
@@ -61,13 +76,13 @@ start(Opts, Apps) ->
     [started(application:start(A),A) || A <- Apps],
     ok.
 
-started(ok,_) ->
+started(ok, A) ->
+    ?dbg("Starting app ~p.\n", [A]),
     ok;
 started({error, {already_started,_}},_) ->
     ok;
 started(Other, A) ->
-    error_logger:error_msg("Failed starting app ~p, reason ~p",
-			   [A, Other]),
+    ?ee("Failed starting app ~p, reason ~p.\n", [A, Other]),
     error({Other, [{application, A}]}).
 
 
@@ -209,7 +224,7 @@ uint64(<<_:64>> = Bin) ->
     Bin.
 
 start_rpc_server() ->
-    error_logger:info_msg("~p: start_rpc_server: pid = ~p", [?MODULE, self()]),
+    ?ei("~p: start_rpc_server: pid = ~p", [?MODULE, self()]),
     case application:get_env(exoport, config) of
 	{ok, Cfg} ->
 	    io:fwrite("Preset exoport config: ~p~n", [Cfg]),
@@ -219,8 +234,7 @@ start_rpc_server() ->
 	    configure(environment)
     end,
     Args = rpc_server_args(),
-    error_logger:info_msg("~p: About to start bert_rpc_exec. ~n"
-			  "Args = ~p~n", [?MODULE, Args]),
+    ?ei("~p: About to start bert_rpc_exec. ~nArgs = ~p~n", [?MODULE, Args]),
     bert_rpc_exec:start_link(Args).
 
 rpc_server_args() ->
@@ -245,6 +259,13 @@ rpc_server_args() ->
 	    {auth, BertAuth}]}].
 
 
+%%--------------------------------------------------------------------
+%% @doc
+%% Returns the access rights for exoport.
+%% @end
+%%--------------------------------------------------------------------
+-spec access() -> {ok, term()}.
+		    
 access() ->
     case application:get_env(exoport, access) of
         {ok, {file, F}} ->
@@ -265,8 +286,7 @@ access(FileName) ->
 	true ->
             file:consult(File);
 	false ->
-            error_logger:error_msg("~p: access: File ~p not found.\n",
-                                  [?MODULE, File]),
+            ?ee("~p: access: File ~p not found.", [?MODULE, File]),
             {ok, []}
     end.
 

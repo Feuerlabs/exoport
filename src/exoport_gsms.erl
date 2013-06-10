@@ -17,11 +17,11 @@
 
 -include_lib("lager/include/log.hrl").
 -include_lib("gsms/include/gsms.hrl").
+-include("exoport.hrl").
 
 %% api
 -export([start_link/1, 
-	 stop/0,
-	 dump/0]).
+	 stop/0]).
 
 %% gen_server callbacks
 -export([init/1, 
@@ -31,13 +31,9 @@
 	 terminate/2, 
 	 code_change/3]).
 
--compile(export_all).
 
 -define(SERVER, ?MODULE). 
 -define(EXODM_RE, "^EXODM-RPC:(sms|gprs)(,(sms|gprs))*:([0-9A-Fa-f][0-9A-Fa-f])*").
-
--define(dbg(Format, Args),
-	lager:debug("~s(~p): " ++ Format, [?MODULE, self() | Args])).
 
 %% for dialyzer
 -type start_options()::{linked, TrueOrFalse::boolean()}.
@@ -47,8 +43,14 @@
 	{
 	  state = init ::atom(),
 	  anumbers = [] ::list(string()),
-	  ref::reference()
+	  provider = "" :: string(),
+	  gsms_ref::reference()
 	}).
+
+%% testing
+-export([start/0,
+	 dump/0]).
+-compile(export_all).  %%% REMOVE !!!!
 
 %%%===================================================================
 %%% API
@@ -87,6 +89,13 @@ stop() ->
 
 %% Test functions
 %% @private
+start() ->
+    application:start(uart),
+    application:start(gsms),
+    application:start(netlink),
+    application:start(pppd_mgr).
+
+%% @private
 dump() ->
     gen_server:call(?SERVER, dump).
 
@@ -107,16 +116,49 @@ dump() ->
 
 init(Args) ->
     lager:info("~p: init: args = ~p,\n pid = ~p\n", [?MODULE, Args, self()]),
-    Anums = case application:get_env(exoport, anumbers) of
-	       undefined -> [];
-	       {ok, A} -> A
-	   end,
-    ?dbg("init: A numbers ~p",[Anums]),
-    Filter = create_filter(Anums),
-    ?dbg("init: filter ~p",[Filter]),
-    Ref = gsms_router:subscribe(Filter),
-    {ok, #ctx {state = up, ref = Ref, anumbers = Anums}}.
+    case init_gsms() of
+	{ok, Ctx} ->
+	    case init_ppp() of
+		{ok, Provider} ->
+		    {ok, Ctx#ctx {state = up, provider = Provider}};
+		{error, Reason} ->
+	    {stop, Reason}
+	    end;
+	{error, Reason} ->
+	    {stop, Reason}
+    end.
 
+init_gsms() ->	
+    case verify_apps_started([uart, gsms]) of
+	ok ->
+	    Anums = case application:get_env(exoport, anumbers) of
+			undefined -> [];
+			{ok, A} -> A
+		    end,
+	    ?dbg("init: A numbers ~p",[Anums]),
+	    Filter = create_filter(Anums),
+	    ?dbg("init: filter ~p",[Filter]),
+	    Ref = gsms_router:subscribe(Filter),
+	    {ok, #ctx {anumbers = Anums, gsms_ref = Ref}};
+	E ->
+	    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
+	    E
+    end.
+
+init_ppp() ->
+    case application:get_env(exoport, ppp_provider) of
+	undefined -> 
+	    "";
+	{ok, Provider} -> 
+	    %% If provider is given the applications must have been started
+	    case verify_apps_started([netlink, pppd_mgr]) of
+		ok -> 
+		    {ok, Provider};
+		E -> 
+		    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
+		    E
+	    end
+    end.
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -140,7 +182,7 @@ init(Args) ->
 			 {stop, Reason::atom(), Reply::term(), Ctx::#ctx{}}.
 
 handle_call(dump, _From, 
-	    Ctx=#ctx {state = State, anumbers = Anums, ref = Ref}) ->
+	    Ctx=#ctx {state = State, anumbers = Anums, gsms_ref = Ref}) ->
     io:format("Ctx: State = ~p, Anums = ~p, GsmsRef = ~p", 
 	      [State, Anums, Ref]),
     {reply, ok, Ctx};
@@ -186,10 +228,9 @@ handle_cast(_Msg, Ctx) ->
 			 {noreply, Ctx::#ctx{}, Timeout::timeout()} |
 			 {stop, Reason::term(), Ctx::#ctx{}}.
 
-handle_info({gsms, _Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info, 
-	    Ctx) ->
+handle_info({gsms, Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info, 
+	    Ctx=#ctx {gsms_ref = Ref}) ->
     ?dbg("handle_info: ~p", [_Info]),
-    %% Check ref ??
     
     case string:tokens(Msg, ":") of
 	["EXODM-RPC", ReplyMethods, Call] -> 
@@ -207,6 +248,9 @@ handle_info({gsms, _Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info,
     end,
     {noreply, Ctx};
 
+handle_info({gsms, UnknownRef, _Pdu} = _Info, Ctx) ->
+    ?dbg("handle_info: info ~p from unknown ref ~p", [_Info, UnknownRef]),
+    {noreply, Ctx};
 handle_info(_Info, Ctx) ->
     ?dbg("handle_info: unknown info ~p", [_Info]),
     {noreply, Ctx}.
@@ -217,7 +261,7 @@ handle_info(_Info, Ctx) ->
 -spec terminate(Reason::term(), Ctx::#ctx{}) -> 
 		       no_return().
 
-terminate(_Reason, _Ctx=#ctx {state = State, ref = Ref}) ->
+terminate(_Reason, _Ctx=#ctx {state = State, gsms_ref = Ref}) ->
     ?dbg("terminate: terminating in state ~p, reason = ~p",
 	 [State, _Reason]),
     gsms_router:unsubscribe(Ref),
@@ -298,6 +342,15 @@ exec_req1(Request, gprs, _Addr) ->
     end,
     %% Reply sent over socket
     exec_req(Request, internal);
+exec_req1(Request, none, _Addr) ->
+    ?dbg("request: don't reply", []),
+    try exec_req(Request, external) of
+	_Result -> ok
+    catch
+	error:Error ->
+	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
+	    ok
+    end;
 exec_req1(_Request, Unknown, _Addr) ->
     ?dbg("request: unknown method ~p", [Unknown]),
     {error, unknown_method}.
@@ -311,11 +364,32 @@ exec_req(Request, ExtOrInt) ->
 from_hex(String) when is_list(String) ->
     << << (erlang:list_to_integer([H], 16)):4 >> || H <- String >>.
 
-%% convert to hex
 to_hex(Bin) when is_binary(Bin) ->
-    [ element(I+1,{$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
-                   $a,$b,$c,$d,$e,$f}) || <<I:4>> <= Bin];
+    [element(I+1,{$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
+		  $a,$b,$c,$d,$e,$f}) || <<I:4>> <= Bin];
 to_hex(List) when is_list(List) ->
     to_hex(list_to_binary(List));
 to_hex(Int) when is_integer(Int) ->
     integer_to_list(Int, 16).
+
+verify_apps_started([]) ->
+    ok;
+verify_apps_started([App | Apps]) ->
+    case verify_app_started(App) of
+	ok -> verify_apps_started(Apps);
+	E -> E
+    end.
+	    
+verify_app_started(App) ->
+    case get(on_host) of
+	true -> 
+	    ok;
+	_Other -> 
+	    case lists:keymember(App, 1, application:which_applications()) of
+		true ->
+		    ok;
+		false ->
+		    {error, list_to_atom(atom_to_list(App) ++ "_not_runnning")}
+	    end
+    end.
+
