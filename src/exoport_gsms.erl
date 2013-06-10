@@ -138,7 +138,7 @@ init_gsms() ->
 	    ?dbg("init: A numbers ~p",[Anums]),
 	    Filter = create_filter(Anums),
 	    ?dbg("init: filter ~p",[Filter]),
-	    Ref = gsms_router:subscribe(Filter),
+	    {ok, Ref} = gsms_router:subscribe(Filter),
 	    {ok, #ctx {anumbers = Anums, gsms_ref = Ref}};
 	E ->
 	    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
@@ -148,11 +148,12 @@ init_gsms() ->
 init_ppp() ->
     case application:get_env(exoport, ppp_provider) of
 	undefined -> 
-	    "";
+	    {ok, ""};
 	{ok, Provider} -> 
 	    %% If provider is given the applications must have been started
 	    case verify_apps_started([netlink, pppd_mgr]) of
 		ok -> 
+		    ok = pppd_mgr:subscribe(),
 		    {ok, Provider};
 		E -> 
 		    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
@@ -181,10 +182,12 @@ init_ppp() ->
 			 {noreply, Ctx::#ctx{}} |
 			 {stop, Reason::atom(), Reply::term(), Ctx::#ctx{}}.
 
-handle_call(dump, _From, 
-	    Ctx=#ctx {state = State, anumbers = Anums, gsms_ref = Ref}) ->
-    io:format("Ctx: State = ~p, Anums = ~p, GsmsRef = ~p", 
-	      [State, Anums, Ref]),
+handle_call(dump, _From, Ctx=#ctx {state = State, 
+				   anumbers = Anums, 
+				   provider = Provider,
+				   gsms_ref = Ref}) ->
+    io:format("Ctx: State = ~p, Anums = ~p, Provider = ~p, GsmsRef = ~p", 
+	      [State, Anums, Provider, Ref]),
     {reply, ok, Ctx};
 
 handle_call(stop, _From, Ctx) ->
@@ -221,6 +224,8 @@ handle_cast(_Msg, Ctx) ->
 %% @end
 %%--------------------------------------------------------------------
 -type info()::
+	up |
+	down |
 	{gsms, Ref::reference(), Msg::string()}.
 
 -spec handle_info(Info::info(), Ctx::#ctx{}) -> 
@@ -251,6 +256,15 @@ handle_info({gsms, Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info,
 handle_info({gsms, UnknownRef, _Pdu} = _Info, Ctx) ->
     ?dbg("handle_info: info ~p from unknown ref ~p", [_Info, UnknownRef]),
     {noreply, Ctx};
+
+handle_info(up, Ctx) ->
+    ?dbg("handle_info: ppp up", []),
+    {noreply, Ctx};
+
+handle_info(down, Ctx) ->
+    ?dbg("handle_info: ppp down", []),
+    {noreply, Ctx};
+
 handle_info(_Info, Ctx) ->
     ?dbg("handle_info: unknown info ~p", [_Info]),
     {noreply, Ctx}.
@@ -265,6 +279,7 @@ terminate(_Reason, _Ctx=#ctx {state = State, gsms_ref = Ref}) ->
     ?dbg("terminate: terminating in state ~p, reason = ~p",
 	 [State, _Reason]),
     gsms_router:unsubscribe(Ref),
+    pppd_mgr:unsubscribe(),
     ok.
 %%--------------------------------------------------------------------
 %% @private
