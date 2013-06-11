@@ -197,7 +197,8 @@ config_device_id(Opts) ->
 	DeviceKey =:= undefined -> false;
 	ServerKey =:= undefined -> false;
 	true ->
-	    InternalDeviceID = to_binary("*" ++ Account ++ "*" ++ DeviceID),
+	    InternalDeviceID = enc_device_key(Account, DeviceID),
+	    %% InternalDeviceID = to_binary("*" ++ Account ++ "*" ++ DeviceID),
 	    application:set_env(bert, reuse_mode, client),
 	    application:set_env(
 	      bert, auth, [
@@ -210,6 +211,28 @@ config_device_id(Opts) ->
 			  ]),
 	    true
     end.
+
+enc_device_key(AName0, ID0) ->
+    AName = to_binary(AName0),
+    ID = to_binary(ID0),
+    Del = pick_delimiter(<<AName/binary, ID/binary>>),
+    <<Del, AName/binary, Del, ID/binary>>.
+
+pick_delimiter(Bin) ->
+    Dels = delimiters(),
+    S = binary_to_list(Bin),
+    case lists:dropwhile(fun(D) -> lists:member(D, S) end, Dels) of
+    %% case [D || D <- Dels, not lists:member(D, S)] of
+	[D|_] ->
+	    D;
+	[] ->
+	    error(cannot_pick_delimiter)
+    end.
+
+delimiters() ->
+    "*=#_-/&+!%^:;.,()[]{}'`<>\\\$".
+
+
 
 to_binary(B) when is_binary(B) ->
     B;
