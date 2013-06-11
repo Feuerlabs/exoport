@@ -27,10 +27,11 @@
 	 terminate/2,
 	 code_change/3]).
 
+-include_lib("lager/include/log.hrl").
+-include("exoport.hrl").
+
 -record(st, {session = undefined,
 	     auto_connect = true}).
-
--include_lib("lager/include/log.hrl").
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -56,7 +57,7 @@ disconnect() ->
     gen_server:call(?MODULE, disconnect, infinity).
 
 init(_) ->
-    error_logger:info_msg("~p: init: pid = ~p", [?MODULE, self()]),
+    ?ei("~p: init: pid = ~p", [?MODULE, self()]),
     St0 = #st{},
     Auto = case application:get_env(exoport, auto_connect) of
 	       {ok, B} when is_boolean(B) ->
@@ -66,19 +67,16 @@ init(_) ->
 	   end,
     {ok, St0#st{auto_connect = Auto}}.
 
-%% maybe_connect(#st{auto_connect = true} = St) ->
-%%     connect_(St);
-%% maybe_connect(St) ->
-%%     St.
 
 handle_call(connect, _From, St) ->
-    %% should perhaps reply something indicating how it went... FIXME
-    {reply, ok, connect_(St)};
+    {Reply, NewState} = connect_(St),
+    {reply, Reply, NewState};
 handle_call(maybe_connect, _From, #st{session = Session,
 				      auto_connect = Auto} = St) ->
     case {Session, Auto} of
 	{undefined, yes} ->
-	    {reply, true, connect_(St)};
+	    {Reply, NewState} = connect_(St),
+	    {reply, Reply, NewState};
 	{undefined, false} ->
 	    {reply, no, St};
 	{_, _} ->
@@ -100,6 +98,7 @@ handle_call(disconnect, _, #st{session = Session} = St) ->
 	  end,
     {reply, Res, St#st{session = undefined}};
 handle_call(session_active, _, #st{session = S} = St) ->
+    %% ??
     {reply, S =/= undefined, St};
 handle_call(_Call, _, St) ->
     ?debug("unknown call ~p in state ~p.", [_Call, St]),
@@ -135,7 +134,7 @@ rpc_(M, F, A, #st{session = undefined} = St, true) ->
 	    check_queue(),
 	    Result;
 	Other ->
-	    ?error("Unexpected: ~p~n", [Other]),
+	    ?error("Unexpected: ~p", [Other]),
 	    {{error, no_session}, St}
     end;
 rpc_(M, F, A, #st{session = Session} = St, _) when Session =/= undefined ->
@@ -145,12 +144,13 @@ rpc_(M, F, A, #st{session = Session} = St, _) when Session =/= undefined ->
 connect_(St) ->
     case call_rpc_(exodm_rpc, ping, [], St) of
 	{{ok, {reply, pong, []}}, St1} ->
-	    ?debug("connected~n", []),
+	    ?debug("connected", []),
 	    check_queue(),
-	    ?debug("queue checked~n", []),
-	    St1;
-	_ ->
-	    St
+	    ?debug("queue checked", []),
+	    {ok, St1};
+	_Other ->
+	    ?debug("connect failed, reply ~p", [_Other]),
+	    {{error, connect_failed}, St#st{session = undefined}}
     end.
 
 call_rpc_(M, F, A, #st{session = Session0} = St) ->

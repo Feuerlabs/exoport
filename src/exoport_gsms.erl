@@ -17,6 +17,7 @@
 
 -include_lib("lager/include/log.hrl").
 -include_lib("gsms/include/gsms.hrl").
+-include_lib("pppd_mgr/include/pppd.hrl").
 -include("exoport.hrl").
 
 %% api
@@ -31,20 +32,31 @@
 	 terminate/2, 
 	 code_change/3]).
 
+-import(proplists, [get_value/3]).
 
 -define(SERVER, ?MODULE). 
--define(EXODM_RE, "^EXODM-RPC:(sms|gprs)(,(sms|gprs))*:([0-9A-Fa-f][0-9A-Fa-f])*").
+-define(EXODM_RE, 
+	"^EXODM-RPC:(sms|gprs)(,(sms|gprs))*:([0-9A-Fa-f][0-9A-Fa-f])*").
+
 
 %% for dialyzer
--type start_options()::{linked, TrueOrFalse::boolean()}.
+-type start_options()::{linked, TrueOrFalse::boolean()} |
+		       {ppp_up_timeout, PppUp::timeout()} |
+		       {ppp_idle_timeout, PppIdle::timeout()}.
 
 %% loop data
 -record(ctx,
 	{
-	  state = init ::atom(),
+	  state = init  ::atom(),
 	  anumbers = [] ::list(string()),
-	  provider = "" :: string(),
-	  gsms_ref::reference()
+	  filter = ""   ::string(),
+	  ppp = false   ::boolean(),
+	  provider = "" ::string(),
+	  request       ::term(),
+	  ppp_up_timeout::timeout(),
+	  ppp_down_timeout::timeout(),
+	  ppp_idle_timeout::timeout(),
+	  gsms_ref      ::reference()
 	}).
 
 %% testing
@@ -68,7 +80,7 @@
 
 start_link(Opts) ->
     lager:info("~p: start_link: start options = ~p\n", [?MODULE, Opts]),
-    F =	case proplists:get_value(linked,Opts,true) of
+    F =	case get_value(linked,Opts,true) of
 	    true -> start_link;
 	    false -> start
 	end,
@@ -110,17 +122,17 @@ dump() ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args::list(start_options())) -> 
+-spec init(Opts::list(start_options())) -> 
 		  {ok, Ctx::#ctx{}} |
 		  {stop, Reason::term()}.
 
-init(Args) ->
-    lager:info("~p: init: args = ~p,\n pid = ~p\n", [?MODULE, Args, self()]),
+init(Opts) ->
+    lager:info("~p: init: opts = ~p,\n pid = ~p\n", [?MODULE, Opts, self()]),
     case init_gsms() of
 	{ok, Ctx} ->
-	    case init_ppp() of
-		{ok, Provider} ->
-		    {ok, Ctx#ctx {state = up, provider = Provider}};
+	    case init_ppp(Opts, Ctx) of
+		{ok, PppCtx} ->
+		    {ok, PppCtx#ctx {state = up}};
 		{error, Reason} ->
 	    {stop, Reason}
 	    end;
@@ -138,23 +150,29 @@ init_gsms() ->
 	    ?dbg("init: A numbers ~p",[Anums]),
 	    Filter = create_filter(Anums),
 	    ?dbg("init: filter ~p",[Filter]),
-	    {ok, Ref} = gsms_router:subscribe(Filter),
-	    {ok, #ctx {anumbers = Anums, gsms_ref = Ref}};
+	    {ok, start_gsms(#ctx {anumbers = Anums, filter = Filter})};
 	E ->
 	    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
 	    E
     end.
 
-init_ppp() ->
+init_ppp(Opts, Ctx) ->
     case application:get_env(exoport, ppp_provider) of
 	undefined -> 
-	    {ok, ""};
+	    {ok, Ctx};
 	{ok, Provider} -> 
 	    %% If provider is given the applications must have been started
 	    case verify_apps_started([netlink, pppd_mgr]) of
 		ok -> 
 		    ok = pppd_mgr:subscribe(),
-		    {ok, Provider};
+		    PppUp = get_value(ppp_up_timeout, Opts, ?PPPD_ON_TIME),
+		    PppDown = get_value(ppp_down_timeout, Opts, ?PPPD_OFF_TIME),
+		    PppIdle = get_value(ppp_idle_timeout, Opts, ?PPPD_IDLE_TIME),
+		    {ok, Ctx#ctx {ppp = true,
+				  provider = Provider,
+				  ppp_up_timeout = PppUp,
+				  ppp_down_timeout = PppDown,
+				  ppp_idle_timeout = PppIdle}};
 		E -> 
 		    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
 		    E
@@ -185,9 +203,10 @@ init_ppp() ->
 handle_call(dump, _From, Ctx=#ctx {state = State, 
 				   anumbers = Anums, 
 				   provider = Provider,
+				   ppp = Ppp,
 				   gsms_ref = Ref}) ->
-    io:format("Ctx: State = ~p, Anums = ~p, Provider = ~p, GsmsRef = ~p", 
-	      [State, Anums, Provider, Ref]),
+    io:format("Ctx: State ~p, Anums ~p, Provider ~p, Ppp ~p, GsmsRef ~p", 
+	      [State, Anums, Provider, Ppp, Ref]),
     {reply, ok, Ctx};
 
 handle_call(stop, _From, Ctx) ->
@@ -226,44 +245,57 @@ handle_cast(_Msg, Ctx) ->
 -type info()::
 	up |
 	down |
-	{gsms, Ref::reference(), Msg::string()}.
+	{gsms, Ref::reference(), Msg::string()} |
+	ppp_up_timeout |
+	ppp_idle_timeout.
 
 -spec handle_info(Info::info(), Ctx::#ctx{}) -> 
 			 {noreply, Ctx::#ctx{}} |
 			 {noreply, Ctx::#ctx{}, Timeout::timeout()} |
 			 {stop, Reason::term(), Ctx::#ctx{}}.
 
-handle_info({gsms, Ref, #gsms_deliver_pdu {ud = Msg, addr = Addr}} = _Info, 
-	    Ctx=#ctx {gsms_ref = Ref}) ->
+handle_info({gsms, Ref, Pdu} = _Info, 
+	    Ctx=#ctx {gsms_ref = Ref, ppp = Ppp}) ->
     ?dbg("handle_info: ~p", [_Info]),
-    
-    case string:tokens(Msg, ":") of
-	["EXODM-RPC", ReplyMethods, Call] -> 
-	    handle_request(from_hex(string:strip(Call)), 
-			   string:strip(ReplyMethods), 
-			   Addr);
-	["EXODM-RPC", Call] -> 
-	    %% default
-	    handle_request(from_hex(string:strip(Call)), 
-			   ["sms"], Addr);
-	    
-	_ ->
-	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
-	    do_nothing
-    end,
-    {noreply, Ctx};
+    case handle_sms(Pdu) of
+	{connect, Request} -> 
+	    NewCtx = case Ppp of
+			 false -> connect_and_exec(Request), Ctx;
+			 true -> activate_ppp(Request, Ctx)
+		     end,
+	    {noreply, NewCtx};
+	ok -> {noreply, Ctx}
+    end;
 
 handle_info({gsms, UnknownRef, _Pdu} = _Info, Ctx) ->
-    ?dbg("handle_info: info ~p from unknown ref ~p", [_Info, UnknownRef]),
+    ?dbg("handle_info: info ~p from unknown ref ~p, ignored.", 
+	 [_Info, UnknownRef]),
     {noreply, Ctx};
 
-handle_info(up, Ctx) ->
-    ?dbg("handle_info: ppp up", []),
+handle_info(up, Ctx=#ctx {request = undefined}) ->
+    ?dbg("handle_info: ppp up, no request, ignore??"),
     {noreply, Ctx};
+
+handle_info(up, Ctx=#ctx {request = Request}) ->
+    ?dbg("handle_info: ppp up, connect to exodm"),
+    connect_and_exec(Request),
+    {noreply, Ctx#ctx {request = undefined}};
 
 handle_info(down, Ctx) ->
-    ?dbg("handle_info: ppp down", []),
-    {noreply, Ctx};
+    ?dbg("handle_info: ppp down, start gsms"),
+    {noreply, start_gsms(Ctx)};
+
+handle_info(ppp_up_timeout, Ctx=#ctx {request = Request}) ->
+    ?dbg("handle_info: ppp up timeout, try again"),
+    {noreply, activate_ppp(Request, Ctx)};
+
+handle_info(ppp_idle_timeout, Ctx) ->
+    ?dbg("handle_info: ppp idle timeout, take down ppp ???"),
+    {noreply, deactivate_ppp(Ctx)};
+
+handle_info(ppp_down_timeout, Ctx) ->
+    ?dbg("handle_info: ppp down timeout, try again"),
+    {noreply, deactivate_ppp(Ctx)};
 
 handle_info(_Info, Ctx) ->
     ?dbg("handle_info: unknown info ~p", [_Info]),
@@ -275,11 +307,13 @@ handle_info(_Info, Ctx) ->
 -spec terminate(Reason::term(), Ctx::#ctx{}) -> 
 		       no_return().
 
-terminate(_Reason, _Ctx=#ctx {state = State, gsms_ref = Ref}) ->
+terminate(_Reason, #ctx {state = State, gsms_ref = Ref, ppp = Ppp}) ->
     ?dbg("terminate: terminating in state ~p, reason = ~p",
 	 [State, _Reason]),
     gsms_router:unsubscribe(Ref),
-    pppd_mgr:unsubscribe(),
+    if Ppp -> pppd_mgr:unsubscribe();
+       true -> do_nothing
+    end,
     ok.
 %%--------------------------------------------------------------------
 %% @private
@@ -315,17 +349,36 @@ create_filter(Anums) ->
     
 
 %%--------------------------------------------------------------------
+handle_sms(#gsms_deliver_pdu {ud = Msg, addr = Addr}) ->
+    case string:tokens(Msg, ":") of
+	["EXODM-RPC", ReplyMethods, Call] -> 
+	    handle_request(from_hex(string:strip(Call)), 
+			string:strip(ReplyMethods), 
+			Addr);
+	["EXODM-RPC", Call] -> 
+	    %% default
+	    handle_request(from_hex(string:strip(Call)), 
+			   ["sms"], Addr);
+	    
+	_ ->
+	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
+	    ok
+    end.
+    
+
 handle_request(Request, MethodsString, Addr) ->
     Methods = [list_to_atom(string:strip(M)) || 
 		  M <- string:tokens(MethodsString, ",")],
     exec_req(Request, Methods, Addr).
     
 exec_req(_Request, [],  _Addr) ->
-    ?dbg("request: no one to reply to", []);
+    ?dbg("request: no one to reply to");
 exec_req(Request, [Method | Methods], Addr) ->
     case exec_req1(Request, Method, Addr) of 
 	ok -> 
 	    ok;
+	{connect, Request} = C ->
+	    C;
 	{error, Error} ->
 	    ?dbg("request: failed using ~p, reason ~p", 
 		 [Method, Error]),
@@ -334,48 +387,94 @@ exec_req(Request, [Method | Methods], Addr) ->
     end.
 	    
 exec_req1(Request, sms, Addr) ->
-    ?dbg("request: sms", []),
-    Reply = 
-	try exec_req(Request, external) of
-	    Result -> Result
-	catch
-	    error:Error ->
-		?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
-		bert:to_binary({error, illegal_call})
-	end,
+    ?dbg("request: sms"),
+    Reply = try_exec(Request, external),
     ?dbg("request: reply ~p", [bert:to_term(Reply)]),
     case gsms_router:send([{addr, Addr}], to_hex(Reply)) of
 	{ok, _Ref} -> ok;
 	E -> E
     end;
 exec_req1(Request, gprs, _Addr) ->
-    ?dbg("request: gprs", []),
-    %% Make sure we are connected
+    ?dbg("request: gprs"),
     case exoport_server:session_active() of
-	true -> ok;
-	_ -> exoport_server:connect()
-    end,
-    %% Reply sent over socket
-    exec_req(Request, internal);
-exec_req1(Request, none, _Addr) ->
-    ?dbg("request: don't reply", []),
-    try exec_req(Request, external) of
-	_Result -> ok
-    catch
-	error:Error ->
-	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
-	    ok
+	true -> 
+	    %% Exec now if we are connected
+	    ?dbg("request: connected"),
+	    try_exec(Request, internal), %% Result??
+	    ok;
+	_ -> 
+	    ?dbg("request: connect"),
+	    {connect, Request}
     end;
+exec_req1(Request, none, _Addr) ->
+    ?dbg("request: don't reply"),
+    try_exec(Request, external),
+    ok;
 exec_req1(_Request, Unknown, _Addr) ->
     ?dbg("request: unknown method ~p", [Unknown]),
     {error, unknown_method}.
 
 
-exec_req(Request, ExtOrInt) ->
+try_exec(Request, ReplyMethod) ->
+    try exec(Request, ReplyMethod) of
+	Result -> Result
+    catch
+	error:Error ->
+	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
+	    bert:to_binary({error, illegal_call})
+    end.
+
+exec(Request, ExtOrInt) ->
     DecodedReq = bert:to_term(Request),
     ?dbg("request: ~p", [DecodedReq]),
     bert:to_binary(bert_rpc_exec:request(DecodedReq, ExtOrInt)).
 
+
+activate_ppp(Request, Ctx=#ctx {provider = Provider, 
+				ppp_idle_timeout = PppIdle,
+				ppp_up_timeout = PppUp}) ->
+    %% Tear down sms so gprs can be acivated
+    ?dbg("activate_ppp: stop gsms"),
+    application:stop(gsms),
+    NewCtx = case pppd_mgr:on(Provider) of
+		 ok -> 
+		     ?dbg("activate_ppp: wait for up"),
+		     Ctx#ctx {request = Request};
+		 {error,ealready} ->
+		     ?dbg("activate_ppp: up, exec ~p", [Request]),
+		     try_exec(Request, internal), %% Check result ??
+		     Ctx#ctx {request = undefined};
+		 {error,ebusy} = _E->
+		     %% Wait and try again ??
+		     ?dbg("activate_ppp: busy, retry"),
+		     erlang:send_after(PppUp, self(), ppp_up_timeout),
+		     Ctx#ctx {request = Request}
+	     end,
+    %% Supervise ppp link to restart gsms when needed
+    erlang:send_after(PppIdle, self(), ppp_idle_timeout),
+    NewCtx#ctx {gsms_ref = undefined}.
+
+deactivate_ppp(Ctx=#ctx {ppp_down_timeout = PppDown}) ->
+    case pppd_mgr:off() of
+	ok -> 
+	    ?dbg("deactivate_ppp: wait for down"),
+	    erlang:send_after(PppDown, self(), ppp_down_timeout),
+	    Ctx;
+	{error,not_running} ->
+	    %% Already down, activate gsms now
+	    ?dbg("deactivate_ppp: down, start gsms"),
+	    start_gsms(Ctx)
+    end.
+
+connect_and_exec(Request) ->
+    exoport_server:connect(),
+    try_exec(Request, internal). %% Result ??
+
+start_gsms(Ctx=#ctx {filter = Filter}) ->
+    application:start(gsms),
+    {ok, Ref} = gsms_router:subscribe(Filter),
+    Ctx#ctx {gsms_ref = Ref}.
+        
 from_hex(String) when is_list(String) ->
     << << (erlang:list_to_integer([H], 16)):4 >> || H <- String >>.
 
