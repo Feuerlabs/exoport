@@ -53,6 +53,7 @@
 	  ppp = false   ::boolean(),
 	  provider = "" ::string(),
 	  request       ::term(),
+	  wait_for      ::atom(),
 	  ppp_up_timeout::timeout(),
 	  ppp_down_timeout::timeout(),
 	  ppp_idle_timeout::timeout(),
@@ -276,14 +277,22 @@ handle_info(up, Ctx=#ctx {request = undefined}) ->
     ?dbg("handle_info: ppp up, no request, ignore??"),
     {noreply, Ctx};
 
-handle_info(up, Ctx=#ctx {request = Request}) ->
+handle_info(up, Ctx=#ctx {request = Request, wait_for = up}) ->
     ?dbg("handle_info: ppp up, connect to exodm"),
     connect_and_exec(Request),
-    {noreply, Ctx#ctx {request = undefined}};
+    {noreply, Ctx#ctx {request = undefined, wait_for = undefined}};
+
+handle_info(up, Ctx) ->
+    ?dbg("handle_info: ppp up, unexpected, ignore ??"),
+    {noreply, Ctx};
+
+handle_info(down, Ctx=#ctx {wait_for = down}) ->
+    ?dbg("handle_info: ppp down, start gsms"),
+    {noreply, start_gsms(Ctx#ctx {wait_for = undefined})};
 
 handle_info(down, Ctx) ->
-    ?dbg("handle_info: ppp down, start gsms"),
-    {noreply, start_gsms(Ctx)};
+    ?dbg("handle_info: ppp down, unexpected, ignore ??"),
+    {noreply, Ctx};
 
 handle_info(ppp_up_timeout, Ctx=#ctx {request = Request}) ->
     ?dbg("handle_info: ppp up timeout, try again"),
@@ -439,7 +448,7 @@ activate_ppp(Request, Ctx=#ctx {provider = Provider,
     NewCtx = case pppd_mgr:on(Provider) of
 		 ok -> 
 		     ?dbg("activate_ppp: wait for up"),
-		     Ctx#ctx {request = Request};
+		     Ctx#ctx {request = Request, wait_for = up};
 		 {error,ealready} ->
 		     ?dbg("activate_ppp: up, exec ~p", [Request]),
 		     try_exec(Request, internal), %% Check result ??
@@ -459,7 +468,7 @@ deactivate_ppp(Ctx=#ctx {ppp_down_timeout = PppDown}) ->
 	ok -> 
 	    ?dbg("deactivate_ppp: wait for down"),
 	    erlang:send_after(PppDown, self(), ppp_down_timeout),
-	    Ctx;
+	    Ctx#ctx {wait_for = down};
 	{error,not_running} ->
 	    %% Already down, activate gsms now
 	    ?dbg("deactivate_ppp: down, start gsms"),
