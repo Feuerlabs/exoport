@@ -446,7 +446,7 @@ activate_ppp(Request, Ctx=#ctx {provider = Provider,
 				ppp_up_timeout = PppUp}) ->
     %% Tear down sms so gprs can be acivated
     ?dbg("activate_ppp: stop gsms"),
-    application:stop(gsms),
+    stop_gsms(Ctx),
     NewCtx = case pppd_mgr:on(Provider) of
 		 ok -> 
 		     ?dbg("activate_ppp: wait for up"),
@@ -482,9 +482,14 @@ connect_and_exec(Request) ->
     try_exec(Request, internal). %% Result ??
 
 start_gsms(Ctx=#ctx {filter = Filter}) ->
+    exoport_server:disconnect(),
     application:start(gsms),
     {ok, Ref} = gsms_router:subscribe(Filter),
     Ctx#ctx {gsms_ref = Ref}.
+
+stop_gsms(Ctx) ->
+    application:stop(gsms),
+    exoport_server:disconnect().
      
 decode(String) ->
     base64:decode(String).
