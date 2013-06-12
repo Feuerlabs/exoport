@@ -36,7 +36,8 @@
 
 -define(SERVER, ?MODULE). 
 -define(EXODM_RE, 
-	"^EXODM-RPC:(sms|gprs)(,(sms|gprs))*:([0-9A-Fa-f][0-9A-Fa-f])*").
+	"^EXODM-RPC:((sms|gprs|none)(,(sms|gprs|none))*)*:"
+	  "[\\s]*[A-Za-z0-9/\+]*(=|==)?$").
 
 
 %% for dialyzer
@@ -203,11 +204,12 @@ init_ppp(Opts, Ctx) ->
 
 handle_call(dump, _From, Ctx=#ctx {state = State, 
 				   anumbers = Anums, 
+				   filter = Filter,
 				   provider = Provider,
 				   ppp = Ppp,
 				   gsms_ref = Ref}) ->
-    io:format("Ctx: State ~p, Anums ~p, Provider ~p, Ppp ~p, GsmsRef ~p", 
-	      [State, Anums, Provider, Ppp, Ref]),
+    io:format("Ctx: State ~p, Anums ~p, Filter ~p, Provider ~p, Ppp ~p, GsmsRef ~p", 
+	      [State, Anums, Filter, Provider, Ppp, Ref]),
     {reply, ok, Ctx};
 
 handle_call(stop, _From, Ctx) ->
@@ -361,13 +363,13 @@ create_filter(Anums) ->
 handle_sms(#gsms_deliver_pdu {ud = Msg, addr = Addr}) ->
     case string:tokens(Msg, ":") of
 	["EXODM-RPC", ReplyMethods, Call] -> 
-	    handle_request(from_hex(string:strip(Call)), 
+	    handle_request(decode(string:strip(Call)), 
 			string:strip(ReplyMethods), 
 			Addr);
 	["EXODM-RPC", Call] -> 
 	    %% default
-	    handle_request(from_hex(string:strip(Call)), 
-			   ["sms"], Addr);
+	    handle_request(decode(string:strip(Call)), 
+			   "sms", Addr);
 	    
 	_ ->
 	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
@@ -399,7 +401,7 @@ exec_req1(Request, sms, Addr) ->
     ?dbg("request: sms"),
     Reply = try_exec(Request, external),
     ?dbg("request: reply ~p", [bert:to_term(Reply)]),
-    case gsms_router:send([{addr, Addr}], to_hex(Reply)) of
+    case gsms_router:send([{addr, Addr}], "EXODM-RET:" ++ encode(Reply)) of
 	{ok, _Ref} -> ok;
 	E -> E
     end;
@@ -483,17 +485,26 @@ start_gsms(Ctx=#ctx {filter = Filter}) ->
     application:start(gsms),
     {ok, Ref} = gsms_router:subscribe(Filter),
     Ctx#ctx {gsms_ref = Ref}.
-        
+     
+decode(String) ->
+    base64:decode(String).
+    %% from_hex(String).
+
+encode(Bin) when is_binary(Bin) ->
+    binary_to_list(base64:encode(Bin));
+    %% to_hex(Bin);
+encode(List) when is_list(List) ->
+    encode(list_to_binary(List));
+encode(Int) when is_integer(Int) ->
+    encode(integer_to_list(Int, 16)).
+
+   
 from_hex(String) when is_list(String) ->
     << << (erlang:list_to_integer([H], 16)):4 >> || H <- String >>.
 
 to_hex(Bin) when is_binary(Bin) ->
     [element(I+1,{$0,$1,$2,$3,$4,$5,$6,$7,$8,$9,
-		  $a,$b,$c,$d,$e,$f}) || <<I:4>> <= Bin];
-to_hex(List) when is_list(List) ->
-    to_hex(list_to_binary(List));
-to_hex(Int) when is_integer(Int) ->
-    integer_to_list(Int, 16).
+		  $a,$b,$c,$d,$e,$f}) || <<I:4>> <= Bin].
 
 verify_apps_started([]) ->
     ok;
