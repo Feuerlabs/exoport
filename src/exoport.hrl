@@ -25,6 +25,8 @@
 -ifndef(EXOPORT_HRL).
 -define(EXOPORT_HRL, true).
 
+-type connection_state() :: active | inactive.
+
 %% Switching to lager (ale)
 -define(dbg(Format, Args),
  	lager:debug("~s(~p): " ++ Format, 

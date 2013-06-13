@@ -17,7 +17,6 @@
 
 -include_lib("lager/include/log.hrl").
 -include_lib("gsms/include/gsms.hrl").
--include_lib("pppd_mgr/include/pppd.hrl").
 -include("exoport.hrl").
 
 %% api
@@ -49,6 +48,7 @@
 -record(ctx,
 	{
 	  state = init  ::atom(),
+	  connection_state ::connection_state(),
 	  anumbers = [] ::list(string()),
 	  filter = ""   ::string(),
 	  ppp = false   ::boolean(),
@@ -130,11 +130,13 @@ dump() ->
 
 init(Opts) ->
     lager:info("~p: init: opts = ~p,\n pid = ~p\n", [?MODULE, Opts, self()]),
+    {ok, ConnectionState} = exoport_server:session_state_subscribe(),
     case init_gsms() of
 	{ok, Ctx} ->
 	    case init_ppp(Opts, Ctx) of
 		{ok, PppCtx} ->
-		    {ok, PppCtx#ctx {state = up}};
+		    {ok, PppCtx#ctx {state = up,
+				     connection_state = ConnectionState}};
 		{error, Reason} ->
 	    {stop, Reason}
 	    end;
@@ -158,7 +160,7 @@ init_gsms() ->
 	    E
     end.
 
-init_ppp(Opts, Ctx) ->
+init_ppp(_Opts, Ctx) ->
     case application:get_env(exoport, ppp_provider) of
 	undefined -> 
 	    {ok, Ctx};
@@ -167,9 +169,11 @@ init_ppp(Opts, Ctx) ->
 	    case verify_apps_started([netlink, pppd_mgr]) of
 		ok -> 
 		    ok = pppd_mgr:subscribe(),
-		    PppUp = get_value(ppp_up_timeout, Opts, ?PPPD_ON_TIME),
-		    PppDown = get_value(ppp_down_timeout, Opts, ?PPPD_OFF_TIME),
-		    PppIdle = get_value(ppp_idle_timeout, Opts, ?PPPD_IDLE_TIME),
+		    %% Or from Opts ??
+		    PppUp = pppd_mgr:ppp_parameter(ppp_on_time),
+		    PppDown = pppd_mgr:ppp_parameter(ppp_off_time),
+		    PppIdle = pppd_mgr:ppp_parameter(ppp_idle_time),
+
 		    {ok, Ctx#ctx {ppp = true,
 				  provider = Provider,
 				  ppp_up_timeout = PppUp,
@@ -203,13 +207,15 @@ init_ppp(Opts, Ctx) ->
 			 {stop, Reason::atom(), Reply::term(), Ctx::#ctx{}}.
 
 handle_call(dump, _From, Ctx=#ctx {state = State, 
+				   connection_state = CState,
 				   anumbers = Anums, 
 				   filter = Filter,
 				   provider = Provider,
 				   ppp = Ppp,
 				   gsms_ref = Ref}) ->
-    io:format("Ctx: State ~p, Anums ~p, Filter ~p, Provider ~p, Ppp ~p, GsmsRef ~p", 
-	      [State, Anums, Filter, Provider, Ppp, Ref]),
+    io:format("Ctx: State ~p, ConnectionState ~p, Anums ~p,~n"
+	      "Filter ~w,~n Provider ~p, Ppp ~p, GsmsRef ~p~n", 
+	      [State, CState, Anums, Filter, Provider, Ppp, Ref]),
     {reply, ok, Ctx};
 
 handle_call(stop, _From, Ctx) ->
@@ -249,6 +255,7 @@ handle_cast(_Msg, Ctx) ->
 	up |
 	down |
 	{gsms, Ref::reference(), Msg::string()} |
+	{session_state, ConnectionState::connection_state()} |
 	ppp_up_timeout |
 	ppp_idle_timeout.
 
@@ -264,7 +271,7 @@ handle_info({gsms, Ref, Pdu} = _Info,
 	{connect, Request} -> 
 	    NewCtx = case Ppp of
 			 false -> connect_and_exec(Request), Ctx;
-			 true -> activate_ppp(Request, Ctx)
+			 true -> gsms_to_ppp(Request, Ctx)
 		     end,
 	    {noreply, NewCtx};
 	ok -> {noreply, Ctx}
@@ -277,6 +284,7 @@ handle_info({gsms, UnknownRef, _Pdu} = _Info, Ctx) ->
 
 handle_info(up, Ctx=#ctx {request = undefined}) ->
     ?dbg("handle_info: ppp up, no request, ignore??"),
+    %% Or should we deactivate ppp ???
     {noreply, Ctx};
 
 handle_info(up, Ctx=#ctx {request = Request, wait_for = up}) ->
@@ -290,23 +298,57 @@ handle_info(up, Ctx) ->
 
 handle_info(down, Ctx=#ctx {wait_for = down}) ->
     ?dbg("handle_info: ppp down, start gsms"),
+    exoport:disconnect(),
     {noreply, start_gsms(Ctx#ctx {wait_for = undefined})};
 
 handle_info(down, Ctx) ->
     ?dbg("handle_info: ppp down, unexpected, ignore ??"),
+    %% Or should we start gsms ???
     {noreply, Ctx};
+
+handle_info({session_state, ConnectionState}, 
+	    Ctx=#ctx {connection_state = ConnectionState}) ->
+    ?dbg("handle_info: old connection state ~p ??", [ConnectionState]),
+    {noreply, Ctx};
+
+handle_info({session_state, active}, 
+	    Ctx=#ctx {connection_state = inactive, 
+		      ppp = false}) ->
+    ?dbg("handle_info: new connection state active when no ppp"),
+    %% This is presumably only a test case when running on host
+    %% so use an arbitary timeout good for testing
+    erlang:send_after(60000, self(), ppp_idle_timeout),
+    {noreply, stop_gsms(Ctx#ctx {connection_state = active})};
+
+handle_info({session_state, active}, 
+	    Ctx=#ctx {connection_state = inactive, 
+		      ppp_idle_timeout = PppIdle}) ->
+    ?dbg("handle_info: new connection state active, stop gsms"),
+    erlang:send_after(PppIdle, self(), ppp_idle_timeout),
+    {noreply, stop_gsms(Ctx#ctx {connection_state = active})};
+
+handle_info({session_state, inactive}, 
+	    Ctx=#ctx {connection_state = active, 
+		      ppp = false}) ->
+    ?dbg("handle_info: new connection state inactive when no ppp"),
+    {noreply, start_gsms(Ctx#ctx {connection_state = inactive})};
+
+handle_info({session_state, inactive}, 
+	    Ctx=#ctx {connection_state = active}) ->
+    ?dbg("handle_info: new connection state inactive, start gsms"),
+    {noreply, start_gsms(Ctx#ctx {connection_state = inactive})};
 
 handle_info(ppp_up_timeout, Ctx=#ctx {request = Request}) ->
     ?dbg("handle_info: ppp up timeout, try again"),
-    {noreply, activate_ppp(Request, Ctx)};
+    {noreply, gsms_to_ppp(Request, Ctx)};
 
 handle_info(ppp_idle_timeout, Ctx) ->
     ?dbg("handle_info: ppp idle timeout, take down ppp ???"),
-    {noreply, deactivate_ppp(Ctx)};
+    {noreply, ppp_to_gsms(Ctx)};
 
 handle_info(ppp_down_timeout, Ctx) ->
     ?dbg("handle_info: ppp down timeout, try again"),
-    {noreply, deactivate_ppp(Ctx)};
+    {noreply, ppp_to_gsms(Ctx)};
 
 handle_info(_Info, Ctx) ->
     ?dbg("handle_info: unknown info ~p", [_Info]),
@@ -322,6 +364,7 @@ terminate(_Reason, #ctx {state = State, gsms_ref = Ref, ppp = Ppp}) ->
     ?dbg("terminate: terminating in state ~p, reason = ~p",
 	 [State, _Reason]),
     gsms_router:unsubscribe(Ref),
+    exoport_server:session_state_unsubscribe(),
     if Ppp -> pppd_mgr:unsubscribe();
        true -> do_nothing
     end,
@@ -369,7 +412,7 @@ handle_sms(#gsms_deliver_pdu {ud = Msg, addr = Addr}) ->
 	["EXODM-RPC", Call] -> 
 	    %% default
 	    handle_request(decode(string:strip(Call)), 
-			   "sms", Addr);
+			   "none", Addr);
 	    
 	_ ->
 	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
@@ -426,6 +469,8 @@ exec_req1(_Request, Unknown, _Addr) ->
     {error, unknown_method}.
 
 
+try_exec(no_request, external) ->
+    ok;
 try_exec(Request, ReplyMethod) ->
     try exec(Request, ReplyMethod) of
 	Result -> Result
@@ -441,39 +486,45 @@ exec(Request, ExtOrInt) ->
     bert:to_binary(bert_rpc_exec:request(DecodedReq, ExtOrInt)).
 
 
-activate_ppp(Request, Ctx=#ctx {provider = Provider, 
-				ppp_idle_timeout = PppIdle,
-				ppp_up_timeout = PppUp}) ->
+gsms_to_ppp(Request, Ctx=#ctx {provider = Provider,
+			       ppp = true,
+			       ppp_idle_timeout = PppIdle,
+			       ppp_up_timeout = PppUp}) ->
     %% Tear down sms so gprs can be acivated
-    ?dbg("activate_ppp: stop gsms"),
-    stop_gsms(Ctx),
+    ?dbg("gsms_to_ppp: stop gsms"),
+    exoport:disconnect(),
+    NoGsmsCtx = stop_gsms(Ctx),
     NewCtx = case pppd_mgr:on(Provider) of
 		 ok -> 
-		     ?dbg("activate_ppp: wait for up"),
-		     Ctx#ctx {request = Request, wait_for = up};
+		     ?dbg("gsms_to_ppp: wait for ppp up"),
+		     NoGsmsCtx#ctx {request = Request, wait_for = up};
 		 {error,ealready} ->
-		     ?dbg("activate_ppp: up, exec ~p", [Request]),
+		     ?dbg("gsms_to_ppp: ppp up, exec ~p", [Request]),
 		     try_exec(Request, internal), %% Check result ??
-		     Ctx#ctx {request = undefined};
+		     NoGsmsCtx#ctx {request = undefined};
 		 {error,ebusy} = _E->
 		     %% Wait and try again ??
-		     ?dbg("activate_ppp: busy, retry"),
+		     ?dbg("gsms_to_ppp: busy, retry"),
 		     erlang:send_after(PppUp, self(), ppp_up_timeout),
-		     Ctx#ctx {request = Request}
+		     NoGsmsCtx#ctx {request = Request}
 	     end,
     %% Supervise ppp link to restart gsms when needed
     erlang:send_after(PppIdle, self(), ppp_idle_timeout),
-    NewCtx#ctx {gsms_ref = undefined}.
+    NewCtx.
 
-deactivate_ppp(Ctx=#ctx {ppp_down_timeout = PppDown}) ->
+ppp_to_gsms(Ctx=#ctx {ppp = false}) ->
+    %% No ppp (idle timeout case)
+    start_gsms(Ctx);
+ppp_to_gsms(Ctx=#ctx {ppp_down_timeout = PppDown}) ->
     case pppd_mgr:off() of
 	ok -> 
-	    ?dbg("deactivate_ppp: wait for down"),
+	    ?dbg("ppp_to_gsms: wait for ppp down"),
 	    erlang:send_after(PppDown, self(), ppp_down_timeout),
 	    Ctx#ctx {wait_for = down};
 	{error,not_running} ->
 	    %% Already down, activate gsms now
-	    ?dbg("deactivate_ppp: down, start gsms"),
+	    ?dbg("ppp_to_gsms: ppp down, start gsms"),
+	    exoport:disconnect(),
 	    start_gsms(Ctx)
     end.
 
@@ -482,14 +533,14 @@ connect_and_exec(Request) ->
     try_exec(Request, internal). %% Result ??
 
 start_gsms(Ctx=#ctx {filter = Filter}) ->
-    exoport_server:disconnect(),
     application:start(gsms),
     {ok, Ref} = gsms_router:subscribe(Filter),
     Ctx#ctx {gsms_ref = Ref}.
 
 stop_gsms(Ctx) ->
+    %% gsms_router:unsubscribe(Ref), not needed ??
     application:stop(gsms),
-    exoport_server:disconnect().
+    Ctx#ctx {gsms_ref = undefined}.
      
 decode(String) ->
     base64:decode(String).

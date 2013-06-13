@@ -15,6 +15,8 @@
 
 -export([rpc/3,
 	 session_active/0,
+	 session_state_subscribe/0,
+	 session_state_unsubscribe/0,
 	 connect/0,
 	 maybe_connect/0,
 	 disconnect/0]).
@@ -31,7 +33,8 @@
 -include("exoport.hrl").
 
 -record(st, {session = undefined,
-	     auto_connect = true}).
+	     auto_connect = true,
+	     subs = []}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -46,6 +49,20 @@ rpc(M, F, A) ->
 
 session_active() ->
     gen_server:call(?MODULE, session_active).
+
+%% @doc
+%%   Subscribe to changes of session state.
+%% @end
+-spec session_state_subscribe() -> {ok, connection_state()}.
+session_state_subscribe() ->
+    gen_server:call(?MODULE, subscribe).
+
+%% @doc
+%%   Unsubscribe to changes of session state.
+%% @end
+-spec session_state_unsubscribe() -> ok.
+session_state_unsubscribe() ->
+    gen_server:call(?MODULE, unsubscribe).
 
 connect() ->
     gen_server:call(?MODULE, connect, infinity).
@@ -65,6 +82,9 @@ init(_) ->
 	       undefined ->
 		   St0#st.auto_connect
 	   end,
+    %% Otherwise dies at session disconnect ??
+    process_flag(trap_exit, true),
+    
     {ok, St0#st{auto_connect = Auto}}.
 
 
@@ -92,6 +112,7 @@ handle_call({call, M, F, A}, _From, St) ->
 handle_call(disconnect, _, #st{session = Session} = St) ->
     Res = case Session of
 	      {Host, Port} ->
+		  inform_subscribers({session_state, inactive}, St),
 		  nice_bert_rpc:disconnect(Host, Port, [tcp]);
 	      undefined ->
 		  {error, no_session}
@@ -100,14 +121,25 @@ handle_call(disconnect, _, #st{session = Session} = St) ->
 handle_call(session_active, _, #st{session = S} = St) ->
     %% ??
     {reply, S =/= undefined, St};
+handle_call(subscribe, {Pid, _Tag}, 
+	    St=#st {session = undefined, subs = Subs}) ->
+    ?dbg("handle_call: {subscribe, ~p} in state ~p.", [Pid, St]),
+    {reply, {ok, inactive}, St#st {subs = lists:usort([Pid | Subs])}};
+handle_call(subscribe, {Pid, _Tag}, St=#st {subs = Subs}) ->
+    ?dbg("handle_call: {subscribe, ~p} in state ~p.", [Pid, St]),
+    {reply, {ok, active}, St#st {subs = lists:usort([Pid | Subs])}};
+handle_call(unsubscribe, {Pid, _Tag}, St=#st {subs = Subs}) ->
+    ?dbg("handle_call: {unsubscribe, ~p} in state ~p.", [Pid, St]),
+    {reply, ok, St#st {subs = Subs -- [Pid]}};
 handle_call(_Call, _, St) ->
-    ?debug("unknown call ~p in state ~p.", [_Call, St]),
+    ?dbg("unknown call ~p in state ~p.", [_Call, St]),
     {reply, {error, unknown_call}, St}.
 
 handle_cast(_, St) ->
     {noreply, St}.
 
-handle_info(_, St) ->
+handle_info(_Info, St) ->
+    ?dbg("unknown info ~p in state ~p.", [_Info, St]),
     {noreply, St}.
 
 terminate(_, _) ->
@@ -144,31 +176,41 @@ rpc_(M, F, A, #st{session = Session} = St, _) when Session =/= undefined ->
 connect_(St) ->
     case call_rpc_(exodm_rpc, ping, [], St) of
 	{{ok, {reply, pong, []}}, St1} ->
-	    ?debug("connected", []),
+	    ?dbg("connected", []),
 	    check_queue(),
-	    ?debug("queue checked", []),
+	    ?dbg("queue checked", []),
 	    {ok, St1};
 	_Other ->
-	    ?debug("connect failed, reply ~p", [_Other]),
+	    ?dbg("connect failed, reply ~p", [_Other]),
 	    {{error, connect_failed}, St#st{session = undefined}}
     end.
 
 call_rpc_(M, F, A, #st{session = Session0} = St) ->
     {Host, Port} =
-	Session = case Session0 of
-		      undefined ->
-			  case application:get_env(exoport, exodm_address) of
-			      {ok, {_, _} = S} -> S;
-			      _ -> error(no_address)
-			  end;
-		      {_, _} ->
-			  Session0
-		  end,
-    St1 = St#st{session = Session},
+	case Session0 of
+	    undefined ->
+		case application:get_env(exoport, exodm_address) of
+		    {ok, {_, _} = S} ->
+			inform_subscribers({session_state, active}, St),
+			S;
+		    _ -> error(no_address)
+		end;
+	    {_, _} ->
+		Session0
+	end,
+    St1 = St#st{session = {Host, Port}},
     Res = {ok, nice_bert_rpc:call_host(Host, Port, [tcp], M, F, A)},
-    ?debug("Res = ~p~n", [Res]),
+    ?dbg("Res = ~p~n", [Res]),
     {Res, St1}.
 
 
 check_queue() ->
     exoport_dispatcher:check_queue(exoport, rpc).
+
+inform_subscribers(Msg, _St=#st {subs = Subs}) ->
+    ?dbg("inform_subscribers: ~p", [Msg]),
+    lists:foreach(
+      fun(Pid) when is_pid(Pid) -> Pid ! Msg;
+	 (_) -> ok
+      end, 
+      Subs).
