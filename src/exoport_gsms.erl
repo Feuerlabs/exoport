@@ -462,7 +462,9 @@ exec_req1(Request, gprs, _Addr) ->
     end;
 exec_req1(Request, none, _Addr) ->
     ?dbg("request: don't reply"),
-    try_exec(Request, external),
+    %%%try_exec(Request, external),
+    %% FIXME !!!!
+    exec_req1(Request, gprs, _Addr),
     ok;
 exec_req1(_Request, Unknown, _Addr) ->
     ?dbg("request: unknown method ~p", [Unknown]),
