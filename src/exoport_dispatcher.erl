@@ -53,7 +53,7 @@ call(Tab0, Req) ->
     Tab = kvdb_lib:table_name(Tab0),
     case gproc:where({n,l, {?MODULE, Tab}}) of
 	undefined ->
-	    error(noproc);
+	    erlang:error(noproc);
 	Pid when is_pid(Pid) ->
 	    gen_server:call(Pid, Req)
     end.
@@ -86,7 +86,7 @@ init({Tab0, M} = Arg) ->
 		   "  E = ~p~n"
 		   "  Trace = ~p~n",
 		   [?MODULE, Arg, E, erlang:get_stacktrace()]),
-	    error(E)
+	    erlang:error(E)
     end.
 
 check_queues({ok, Q}, #st{tab = Tab} = St) ->

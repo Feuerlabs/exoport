@@ -193,7 +193,7 @@ call_rpc_(M, F, A, #st{session = Session0} = St) ->
 		    {ok, {_, _} = S} ->
 			inform_subscribers({session_state, active}, St),
 			S;
-		    _ -> error(no_address)
+		    _ -> erlang:error(no_address)
 		end;
 	    {_, _} ->
 		Session0

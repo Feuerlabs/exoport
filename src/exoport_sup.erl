@@ -100,4 +100,4 @@ add_children(ChildSpecs) ->
 ok({ok, _}) -> ok;
 ok({ok, _, _}) -> ok;
 ok(Other) ->
-    error(Other).
+    erlang:error(Other).

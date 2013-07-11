@@ -554,7 +554,7 @@ encode(Bin) when is_binary(Bin) ->
 encode(List) when is_list(List) ->
     encode(list_to_binary(List));
 encode(Int) when is_integer(Int) ->
-    encode(integer_to_list(Int, 16)).
+    encode(erlang:integer_to_list(Int, 16)).
 
    
 from_hex(String) when is_list(String) ->

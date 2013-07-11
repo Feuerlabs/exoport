@@ -71,7 +71,7 @@ start(Opts, Apps) ->
 			  case lists:member(A, Apps) of
 			      true -> application:set_env(A, K, V);
 			      false ->
-				  error({not_allowed, [set_env, {A,K,V}]})
+				  erlang:error({not_allowed, [set_env, {A,K,V}]})
 			  end
 		  end, Opts),
     [started(application:start(A),A) || A <- Apps],
@@ -84,7 +84,7 @@ started({error, {already_started,_}},_) ->
     ok;
 started(Other, A) ->
     ?ee("Failed starting app ~p, reason ~p.\n", [A, Other]),
-    error({Other, [{application, A}]}).
+    erlang:error({Other, [{application, A}]}).
 
 
 
@@ -227,7 +227,7 @@ pick_delimiter(Bin) ->
 	[D|_] ->
 	    D;
 	[] ->
-	    error(cannot_pick_delimiter)
+	    erlang:error(cannot_pick_delimiter)
     end.
 
 delimiters() ->
