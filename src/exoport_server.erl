@@ -32,6 +32,8 @@
 -include_lib("lager/include/log.hrl").
 -include("exoport.hrl").
 
+-define(RPC_TIMEOUT, 5000).
+
 -record(st, {session = undefined,
 	     auto_connect = true,
 	     subs = []}).
@@ -40,7 +42,7 @@ start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 rpc(M, F, A) ->
-    case gen_server:call(?MODULE, {call, M, F, A}, infinity) of
+    case gen_server:call(?MODULE, {call, M, F, A}, ?RPC_TIMEOUT) of
 	{ok, Result} ->
 	    Result;
 	{error, _} = Error ->
