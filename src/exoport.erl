@@ -161,6 +161,8 @@ get_env_var(_MatchPrefix, []) ->
     [].
 
 
+consult_config(environment) ->
+    {ok, []};
 consult_config([T|_] = Config) when is_tuple(T) ->
     {ok, Config};
 consult_config({script, File}) ->
@@ -255,7 +257,7 @@ start_rpc_server() ->
 	    configure(Cfg, false);
 	undefined ->
 	    io:fwrite("No exoport config file given. Will use environment", []),
-	    configure(environment)
+	    configure(environment, false)
     end,
     Args = rpc_server_args(),
     ?ei("~p: About to start bert_rpc_exec. ~nArgs = ~p~n", [?MODULE, Args]),
