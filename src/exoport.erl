@@ -33,7 +33,7 @@
 -export([get_env_var/2]).
 
 -include_lib("bert/include/bert.hrl").
--include_lib("lager/include/log.hrl").
+-include("log.hrl").
 
 -define(ACCESS_FILE,"rpc_access.conf").
 

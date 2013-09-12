@@ -6,7 +6,7 @@
 	 data_to_json/3]).
 
 -include_lib("exo/include/exo_http.hrl").
--include_lib("lager/include/log.hrl").
+-include("log.hrl").
 
 
 instance(Opts) ->

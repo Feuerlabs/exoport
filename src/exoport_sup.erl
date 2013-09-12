@@ -49,13 +49,13 @@
 			{error, Error::term()}.
 
 start_link(Args) ->
-    ?ei("~p: start_link: Available environment = ~p.", 
+    ?ei("~p: start_link: Available environment = ~p.",
 	[?MODULE, Args]),
     case supervisor:start_link({local, ?MODULE}, ?MODULE, Args) of
 	{ok, Pid} ->
 	    {ok, Pid, {normal, Args}};
 	Error ->
-	    ?ee("~p: start_link: Failed to start process, reason ~p.",  
+	    ?ee("~p: start_link: Failed to start process, reason ~p.",
 		[?MODULE, Error]),
 	    Error
     end.
@@ -84,8 +84,8 @@ init(Args) ->
 	   permanent, 5000, worker, [bert_rpc_exec]},
     EG = {exoport_gsms, {exoport_gsms, start_link, [[]]},
 	  permanent, 5000, worker, [exoport_gsms]},
-    
-    Children = 
+
+    Children =
 	case proplists:get_value(gsms, Args, false) of
 	    false -> [ED, ES, BRE];
 	    true -> [ED, ES, BRE, EG]

@@ -19,7 +19,7 @@
 	     pids = dict:new(),
 	     pending = dict:new()}).
 
--include_lib("lager/include/log.hrl").
+-include("log.hrl").
 
 -spec check_queue(kvdb:tab_name(),
 		  kvdb:queue_name()) -> pid() | {pending, pid()}.

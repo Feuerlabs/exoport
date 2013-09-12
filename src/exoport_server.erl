@@ -29,7 +29,7 @@
 	 terminate/2,
 	 code_change/3]).
 
--include_lib("lager/include/log.hrl").
+-include("log.hrl").
 -include("exoport.hrl").
 
 -define(RPC_TIMEOUT, 5000).

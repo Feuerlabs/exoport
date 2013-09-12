@@ -13,7 +13,7 @@
 	 ignore/3]).
 -export([dispatch/2]).
 
--include_lib("lager/include/log.hrl").
+-include("log.hrl").
 
 
 queue_rpc({_,_,_} = RPC, {_,_} = ReturnHook) ->

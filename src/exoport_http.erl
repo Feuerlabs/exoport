@@ -2,10 +2,10 @@
 
 -compile(export_all).
 
-%% -include_lib("lager/include/log.hrl").
+%% -include("log.hrl").
 -define(debug(Fmt, As), io:fwrite("~p: " ++ Fmt, [?MODULE|As])).
 
--record(conf, {gconf, sconf}).
+%% -record(conf, {gconf, sconf}).
 
 instance() ->
     case application:get_env(yaws_http) of
