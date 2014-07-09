@@ -13,7 +13,16 @@ instance() ->
 	    yaws_instance(Opts);
 	undefined ->
 	    case application:get_env(exo_http) of
-		{ok, Opts} ->
+		%% Support multiple instances of exoport_exo_http, each listening
+		%% to their own port.
+		{ok, [H | _] = OptsList} when is_list(H) ->
+		    lists:foreach(fun(Opt) -> 
+				      ?debug("New exoport_http instance(elem(~p))~n", [Opt]),
+				      exoport_exo_http:instance(Opt)
+			      end, OptsList);
+
+		{ok, Opts} when is_list(Opts) ->
+		    ?debug("New exoport_http instance(~p)~n", [Opts]),
 		    exoport_exo_http:instance(Opts);
 		undefined ->
 		    ok
