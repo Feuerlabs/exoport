@@ -15,7 +15,8 @@ instance(Opts) ->
 	       AppMod when is_atom(AppMod) -> [AppMod];
 	       {App, St} -> [{App, St}]
 	   end,
-    Child = {exo_http, {exo_http_server, start_link,
+
+    Child = {{ exo_http, Port }, {exo_http_server, start_link,
 			[Port, [{request_handler,
 				 {?MODULE, handle_body, Args}}]]},
 	     permanent, 5000, worker, [exo_http_server]},
