@@ -49,13 +49,13 @@ start(Opts) ->
 	case {application:get_env(exoport, gsms),
 	      application:get_env(exoport, ppp_provider)} of
 	    {{ok, true}, {ok, _Provider}} ->
-		[crypto, public_key, exo, bert, gproc, kvdb, 
+		[crypto, asn1, public_key, exo, bert, gproc, kvdb,
 		 uart, gsms, netlink, pppd_mgr, exoport];
 	    {{ok, true}, _} -> 
-		[crypto, public_key, exo, bert, gproc, kvdb, 
+		[crypto, asn1, public_key, exo, bert, gproc, kvdb,
 		 uart, gsms, exoport];
 	    _ -> 
-		[crypto, public_key, exo, bert, gproc, kvdb, exoport]
+		[crypto, asn1, public_key, exo, bert, gproc, kvdb, exoport]
 	end,
     ?dbg("apps needed ~p.\n", [Apps]),
     start(Opts, Apps).
@@ -178,10 +178,14 @@ reload_conf() ->
     supervisor:restart_child(exoport_sup, bert_rpc_exec).
 
 config_exodm_addr(Opts) ->
-    Host = alt_opt([exodm_host, host, exo_host], Opts, "localhost"),
-    Port = alt_opt([exodm_port, port, exo_port], Opts, 9900),
-    application:set_env(exoport, exodm_address, {Host, Port}),
-    true.
+    case application:get_env(exoport, exodm_address) of
+	undefined ->
+	    Host = alt_opt([exodm_host, host, exo_host], Opts, "localhost"),
+	    Port = alt_opt([exodm_port, port, exo_port], Opts, 9900),
+	    application:set_env(exoport, exodm_address, {Host, Port});
+	{ok, {_Host, Port}} when is_integer(Port) ->
+	    ok %% do not touch sys.config
+    end.
 
 config_device_id(Opts) ->
     DeviceID = alt_opt([device_id, 'device-id'], Opts, undefined),
@@ -317,7 +321,7 @@ access(FileName) ->
     end.
 
 opt_env(K, Default) ->
-    case application:get_env(K) of
+    case application:get_env(bert, K) of
         {ok, Val} ->
             Val;
         undefined ->
