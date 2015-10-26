@@ -28,14 +28,6 @@
 
 -type connection_state() :: active | inactive.
 
-%% Switching to lager (ale)
--define(dbg(Format, Args),
- 	lager:debug("~s(~p): " ++ Format, 
-		    [?MODULE, self() | Args])).
--define(dbg(Format),
- 	lager:debug("~s(~p): " ++ Format, 
-		    [?MODULE, self()])).
-
 %% Convenience defines 
 -ifndef(ee).
 -define(ee(String, List), error_logger:error_msg(String, List)).

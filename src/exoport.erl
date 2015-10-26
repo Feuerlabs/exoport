@@ -57,7 +57,7 @@ start(Opts) ->
 	    _ -> 
 		[crypto, asn1, public_key, exo, bert, gproc, kvdb, exoport]
 	end,
-    ?dbg("apps needed ~p.\n", [Apps]),
+    lager:debug("apps needed ~p.\n", [Apps]),
     start(Opts, Apps).
     
 
@@ -78,7 +78,7 @@ start(Opts, Apps) ->
     ok.
 
 started(ok, A) ->
-    ?dbg("Starting app ~p.\n", [A]),
+    lager:debug("Starting app ~p.\n", [A]),
     ok;
 started({error, {already_started,_}},_) ->
     ok;

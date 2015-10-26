@@ -15,7 +15,6 @@
 -module(exoport_gsms).
 -behaviour(gen_server).
 
--include("log.hrl").
 -include_lib("gsms/include/gsms.hrl").
 -include("exoport.hrl").
 
@@ -81,7 +80,7 @@
 			{error, Error::term()}.
 
 start_link(Opts) ->
-    lager:info("~p: start_link: start options = ~p\n", [?MODULE, Opts]),
+    lager:info("start options = ~p\n", [Opts]),
     F =	case get_value(linked,Opts,true) of
 	    true -> start_link;
 	    false -> start
@@ -129,7 +128,7 @@ dump() ->
 		  {stop, Reason::term()}.
 
 init(Opts) ->
-    lager:info("~p: init: opts = ~p,\n pid = ~p\n", [?MODULE, Opts, self()]),
+    lager:info("opts = ~p,\n pid = ~p\n", [Opts, self()]),
     {ok, ConnectionState} = exoport_server:session_state_subscribe(),
     case init_gsms() of
 	{ok, Ctx} ->
@@ -151,9 +150,9 @@ init_gsms() ->
 			undefined -> [];
 			{ok, A} -> A
 		    end,
-	    ?dbg("init: A numbers ~p",[Anums]),
+	    lager:debug("A numbers ~p",[Anums]),
 	    Filter = create_filter(Anums),
-	    ?dbg("init: filter ~p",[Filter]),
+	    lager:debug("filter ~p",[Filter]),
 	    {ok, start_gsms(#ctx {anumbers = Anums, filter = Filter})};
 	E ->
 	    ?ee("Not possible to start ~p, reason ~p.", [?MODULE, E]),
@@ -219,11 +218,11 @@ handle_call(dump, _From, Ctx=#ctx {state = State,
     {reply, ok, Ctx};
 
 handle_call(stop, _From, Ctx) ->
-    ?dbg("stop:",[]),
+    lager:debug("stop",[]),
     {stop, normal, ok, Ctx};
 
 handle_call(_Request, _From, Ctx) ->
-    ?dbg("handle_call: unknown request ~p", [_Request]),
+    lager:debug("unknown request ~p", [_Request]),
     {reply, {error, bad_call}, Ctx}.
 
 %%--------------------------------------------------------------------
@@ -241,7 +240,7 @@ handle_call(_Request, _From, Ctx) ->
 			 {stop, Reason::term(), Ctx::#ctx{}}.
 
 handle_cast(_Msg, Ctx) ->
-    ?dbg("handle_cast: unknown msg ~p", [_Msg]),
+    lager:debug("unknown msg ~p", [_Msg]),
     {noreply, Ctx}.
 
 %%--------------------------------------------------------------------
@@ -266,7 +265,7 @@ handle_cast(_Msg, Ctx) ->
 
 handle_info({gsms, Ref, Pdu} = _Info, 
 	    Ctx=#ctx {gsms_ref = Ref, ppp = Ppp}) ->
-    ?dbg("handle_info: ~p", [_Info]),
+    lager:debug("~p", [_Info]),
     case handle_sms(Pdu) of
 	{connect, Request} -> 
 	    NewCtx = case Ppp of
@@ -278,43 +277,43 @@ handle_info({gsms, Ref, Pdu} = _Info,
     end;
 
 handle_info({gsms, UnknownRef, _Pdu} = _Info, Ctx) ->
-    ?dbg("handle_info: info ~p from unknown ref ~p, ignored.", 
+    lager:debug("info ~p from unknown ref ~p, ignored.", 
 	 [_Info, UnknownRef]),
     {noreply, Ctx};
 
 handle_info(up, Ctx=#ctx {request = undefined}) ->
-    ?dbg("handle_info: ppp up, no request, ignore??"),
+    lager:debug("ppp up, no request, ignore??"),
     %% Or should we deactivate ppp ???
     {noreply, Ctx};
 
 handle_info(up, Ctx=#ctx {request = Request, wait_for = up}) ->
-    ?dbg("handle_info: ppp up, connect to exodm"),
+    lager:debug("ppp up, connect to exodm"),
     connect_and_exec(Request),
     {noreply, Ctx#ctx {request = undefined, wait_for = undefined}};
 
 handle_info(up, Ctx) ->
-    ?dbg("handle_info: ppp up, unexpected, ignore ??"),
+    lager:debug("ppp up, unexpected, ignore ??"),
     {noreply, Ctx};
 
 handle_info(down, Ctx=#ctx {wait_for = down}) ->
-    ?dbg("handle_info: ppp down, start gsms"),
+    lager:debug("ppp down, start gsms"),
     exoport:disconnect(),
     {noreply, start_gsms(Ctx#ctx {wait_for = undefined})};
 
 handle_info(down, Ctx) ->
-    ?dbg("handle_info: ppp down, unexpected, ignore ??"),
+    lager:debug("ppp down, unexpected, ignore ??"),
     %% Or should we start gsms ???
     {noreply, Ctx};
 
 handle_info({session_state, ConnectionState}, 
 	    Ctx=#ctx {connection_state = ConnectionState}) ->
-    ?dbg("handle_info: old connection state ~p ??", [ConnectionState]),
+    lager:debug("old connection state ~p ??", [ConnectionState]),
     {noreply, Ctx};
 
 handle_info({session_state, active}, 
 	    Ctx=#ctx {connection_state = inactive, 
 		      ppp = false}) ->
-    ?dbg("handle_info: new connection state active when no ppp"),
+    lager:debug("new connection state active when no ppp"),
     %% This is presumably only a test case when running on host
     %% so use an arbitary timeout good for testing
     erlang:send_after(60000, self(), ppp_idle_timeout),
@@ -323,35 +322,35 @@ handle_info({session_state, active},
 handle_info({session_state, active}, 
 	    Ctx=#ctx {connection_state = inactive, 
 		      ppp_idle_timeout = PppIdle}) ->
-    ?dbg("handle_info: new connection state active, stop gsms"),
+    lager:debug("handle_info: new connection state active, stop gsms"),
     erlang:send_after(PppIdle, self(), ppp_idle_timeout),
     {noreply, stop_gsms(Ctx#ctx {connection_state = active})};
 
 handle_info({session_state, inactive}, 
 	    Ctx=#ctx {connection_state = active, 
 		      ppp = false}) ->
-    ?dbg("handle_info: new connection state inactive when no ppp"),
+    lager:debug("new connection state inactive when no ppp"),
     {noreply, start_gsms(Ctx#ctx {connection_state = inactive})};
 
 handle_info({session_state, inactive}, 
 	    Ctx=#ctx {connection_state = active}) ->
-    ?dbg("handle_info: new connection state inactive, start gsms"),
+    lager:debug("new connection state inactive, start gsms"),
     {noreply, start_gsms(Ctx#ctx {connection_state = inactive})};
 
 handle_info(ppp_up_timeout, Ctx=#ctx {request = Request}) ->
-    ?dbg("handle_info: ppp up timeout, try again"),
+    lager:debug("ppp up timeout, try again"),
     {noreply, gsms_to_ppp(Request, Ctx)};
 
 handle_info(ppp_idle_timeout, Ctx) ->
-    ?dbg("handle_info: ppp idle timeout, take down ppp ???"),
+    lager:debug("ppp idle timeout, take down ppp ???"),
     {noreply, ppp_to_gsms(Ctx)};
 
 handle_info(ppp_down_timeout, Ctx) ->
-    ?dbg("handle_info: ppp down timeout, try again"),
+    lager:debug("ppp down timeout, try again"),
     {noreply, ppp_to_gsms(Ctx)};
 
 handle_info(_Info, Ctx) ->
-    ?dbg("handle_info: unknown info ~p", [_Info]),
+    lager:debug("unknown info ~p", [_Info]),
     {noreply, Ctx}.
 
 %%--------------------------------------------------------------------
@@ -361,7 +360,7 @@ handle_info(_Info, Ctx) ->
 		       no_return().
 
 terminate(_Reason, #ctx {state = State, gsms_ref = Ref, ppp = Ppp}) ->
-    ?dbg("terminate: terminating in state ~p, reason = ~p",
+    lager:debug("terminating in state ~p, reason = ~p",
 	 [State, _Reason]),
     gsms_router:unsubscribe(Ref),
     exoport_server:session_state_unsubscribe(),
@@ -380,7 +379,7 @@ terminate(_Reason, #ctx {state = State, gsms_ref = Ref, ppp = Ppp}) ->
 			 {ok, NewCtx::#ctx{}}.
 
 code_change(_OldVsn, Ctx, _Extra) ->
-    ?dbg("code_change: old version ~p", [_OldVsn]),
+    lager:debug("old version ~p", [_OldVsn]),
     {ok, Ctx}.
 
 
@@ -415,7 +414,7 @@ handle_sms(#gsms_deliver_pdu {ud = Msg, addr = Addr}) ->
 			   "none", Addr);
 	    
 	_ ->
-	    ?dbg("handle_info: gsms, illegal msg ~p", [Msg]),
+	    lager:debug("gsms, illegal msg ~p", [Msg]),
 	    ok
     end.
     
@@ -426,7 +425,7 @@ handle_request(Request, MethodsString, Addr) ->
     exec_req(Request, Methods, Addr).
     
 exec_req(_Request, [],  _Addr) ->
-    ?dbg("request: no one to reply to");
+    lager:debug("request: no one to reply to");
 exec_req(Request, [Method | Methods], Addr) ->
     case exec_req1(Request, Method, Addr) of 
 	ok -> 
@@ -434,40 +433,40 @@ exec_req(Request, [Method | Methods], Addr) ->
 	{connect, Request} = C ->
 	    C;
 	{error, Error} ->
-	    ?dbg("request: failed using ~p, reason ~p", 
+	    lager:debug("request: failed using ~p, reason ~p", 
 		 [Method, Error]),
 	    %% Try next method
 	    exec_req(Request, Methods, Addr)
     end.
 	    
 exec_req1(Request, sms, Addr) ->
-    ?dbg("request: sms"),
+    lager:debug("request: sms"),
     Reply = try_exec(Request, external),
-    ?dbg("request: reply ~p", [bert:to_term(Reply)]),
+    lager:debug("request: reply ~p", [bert:to_term(Reply)]),
     case gsms_router:send([{addr, Addr}], "EXODM-RET:" ++ encode(Reply)) of
 	{ok, _Ref} -> ok;
 	E -> E
     end;
 exec_req1(Request, gprs, _Addr) ->
-    ?dbg("request: gprs"),
+    lager:debug("request: gprs"),
     case exoport_server:session_active() of
 	true -> 
 	    %% Exec now if we are connected
-	    ?dbg("request: connected"),
+	    lager:debug("request: connected"),
 	    try_exec(Request, internal), %% Result??
 	    ok;
 	_ -> 
-	    ?dbg("request: connect"),
+	    lager:debug("request: connect"),
 	    {connect, Request}
     end;
 exec_req1(Request, none, _Addr) ->
-    ?dbg("request: don't reply"),
+    lager:debug("request: don't reply"),
     %%%try_exec(Request, external),
     %% FIXME !!!!
     exec_req1(Request, gprs, _Addr),
     ok;
 exec_req1(_Request, Unknown, _Addr) ->
-    ?dbg("request: unknown method ~p", [Unknown]),
+    lager:debug("request: unknown method ~p", [Unknown]),
     {error, unknown_method}.
 
 
@@ -478,13 +477,13 @@ try_exec(Request, ReplyMethod) ->
 	Result -> Result
     catch
 	error:Error ->
-	    ?error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
+	    lager:error("CRASH: ~p; ~p~n", [Error, erlang:get_stacktrace()]),
 	    bert:to_binary({error, illegal_call})
     end.
 
 exec(Request, ExtOrInt) ->
     DecodedReq = bert:to_term(Request),
-    ?dbg("request: ~p", [DecodedReq]),
+    lager:debug("request: ~p", [DecodedReq]),
     bert:to_binary(bert_rpc_exec:request(DecodedReq, ExtOrInt)).
 
 
@@ -493,20 +492,20 @@ gsms_to_ppp(Request, Ctx=#ctx {provider = Provider,
 			       ppp_idle_timeout = PppIdle,
 			       ppp_up_timeout = PppUp}) ->
     %% Tear down sms so gprs can be acivated
-    ?dbg("gsms_to_ppp: stop gsms"),
+    lager:debug("stop gsms"),
     exoport:disconnect(),
     NoGsmsCtx = stop_gsms(Ctx),
     NewCtx = case pppd_mgr:on(Provider) of
 		 ok -> 
-		     ?dbg("gsms_to_ppp: wait for ppp up"),
+		     lager:debug("wait for ppp up"),
 		     NoGsmsCtx#ctx {request = Request, wait_for = up};
 		 {error,ealready} ->
-		     ?dbg("gsms_to_ppp: ppp up, exec ~p", [Request]),
+		     lager:debug("ppp up, exec ~p", [Request]),
 		     try_exec(Request, internal), %% Check result ??
 		     NoGsmsCtx#ctx {request = undefined};
 		 {error,ebusy} = _E->
 		     %% Wait and try again ??
-		     ?dbg("gsms_to_ppp: busy, retry"),
+		     lager:debug("busy, retry"),
 		     erlang:send_after(PppUp, self(), ppp_up_timeout),
 		     NoGsmsCtx#ctx {request = Request}
 	     end,
@@ -520,12 +519,12 @@ ppp_to_gsms(Ctx=#ctx {ppp = false}) ->
 ppp_to_gsms(Ctx=#ctx {ppp_down_timeout = PppDown}) ->
     case pppd_mgr:off() of
 	ok -> 
-	    ?dbg("ppp_to_gsms: wait for ppp down"),
+	    lager:debug("wait for ppp down"),
 	    erlang:send_after(PppDown, self(), ppp_down_timeout),
 	    Ctx#ctx {wait_for = down};
 	{error,not_running} ->
 	    %% Already down, activate gsms now
-	    ?dbg("ppp_to_gsms: ppp down, start gsms"),
+	    lager:debug("ppp down, start gsms"),
 	    exoport:disconnect(),
 	    start_gsms(Ctx)
     end.
