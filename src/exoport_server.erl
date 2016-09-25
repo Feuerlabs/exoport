@@ -32,6 +32,8 @@
 -include("log.hrl").
 -include("exoport.hrl").
 
+-define(dbg(Fmt, Args), lager:debug(Fmt, Args)).
+
 -define(RPC_TIMEOUT, 5000).
 
 -record(st, {session = undefined,
